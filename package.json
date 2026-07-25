@@ -1,0 +1,11 @@
+{
+  "name": "code-from-teams",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Drive GitHub Copilot from a Microsoft Teams thread",
+  "scripts": {
+    "bridge": "node scripts/teams-roundtrip-test.js",
+    "post": "node scripts/postflow.js",
+    "soak": "node scripts/soakflow.js"
+  }
+}
