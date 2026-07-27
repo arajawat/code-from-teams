@@ -428,8 +428,40 @@ teams-roundtrip-test.js already contains every piece the real bridge needs - HMA
 toPlainText(), threadRootOf(), the parked-question map, the serialize lock, flow POST.
 Only runScenario() is fake. Replace it with:
   1. npm i @github/copilot-sdk
-  2. resumeSession(`teams-${threadRoot}`) or createSession, infiniteSessions: true
+  2. createSession({ sessionId: `teams-${threadRoot}`, ... }) / resumeSession(id, cfg)
+     infiniteSessions: { enabled: true }   <- an OBJECT, not a boolean
   3. onPermissionRequest: approveAll     <- MUST be explicit; omitting it HANGS
   4. onUserInputRequest: ask via the flow, return the parked Promise (already built)
   5. milestone posts throttled to ~1/15s, then the final result
   6. question timeout + turn timeout (R4)
+
+## SDK API VERIFIED AGAINST THE TYPINGS (@github/copilot-sdk 1.0.8, 2026-07-27)
+Re-checked rather than quoted from memory, and one thing I had written was WRONG.
+
+  createSession(config: SessionConfig): Promise<CopilotSession>
+  resumeSession(sessionId: string, config: ResumeSessionConfig): Promise<CopilotSession>
+  session.send(prompt | MessageOptions): Promise<string>              // returns msg id
+  session.sendAndWait(prompt | MessageOptions, timeout?): Promise<AssistantMessageEvent | undefined>
+
+SessionConfig.sessionId?: string
+  "Optional custom session ID. If not provided, the server generates one."
+  ^ This is what makes derive-don't-store work. We hand it teams-<threadRoot>.
+
+sendAndWait takes a TIMEOUT argument, which is R4 (turn timeout) mostly solved for free.
+It resolves with the final assistant message when the session goes idle, and returns
+undefined rather than throwing - so `undefined` must be handled as "turn produced
+nothing", not treated as success.
+
+CORRECTION: infiniteSessions is InfiniteSessionConfig, an OBJECT, not a boolean:
+  { enabled?: boolean (default true),
+    backgroundCompactionThreshold?: number (default 0.80),
+    bufferExhaustionThreshold?: number (default 0.95) }
+An earlier note in this file said `infiniteSessions: true`. Wrong shape. Fixed.
+
+Re-confirmed:
+  approveAll IS exported from the package root (dist/index.d.ts), typed PermissionHandler.
+  onPermissionRequest omitted => "surfaced as events and LEFT PENDING for the consumer
+    to resolve" - i.e. the agent hangs. Not auto-approve. Confirmed in the doc comment.
+  onUserInputRequest - "When provided, ENABLES the ask_user tool". Off by default.
+  UserInputHandler = (request, invocation: { sessionId }) => Promise<...> | ...
+    The Promise return is what lets us park the question in a Teams thread.

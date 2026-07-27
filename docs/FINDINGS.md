@@ -339,7 +339,9 @@ lock and the flow POST are all proven. Only `runScenario()` is fake.
 
 1. **Swap the scenario for a Copilot session.** `npm i @github/copilot-sdk`, then
    `resumeSession("teams-" + threadRoot)` (falling back to create), with
-   `infiniteSessions: true` on from day one.
+   `infiniteSessions: { enabled: true }` on from day one — it is a config **object**,
+   not a boolean (`enabled` defaults true; the compaction thresholds default to 0.80
+   background / 0.95 blocking).
 2. **Pass `approveAll` as `onPermissionRequest` explicitly.** Omitting it does not mean
    "auto-approve" — it leaves requests pending and the agent hangs on its first tool
    call.
