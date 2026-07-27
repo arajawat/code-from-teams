@@ -104,9 +104,26 @@ export PATH="$HOME/bin:$PATH"                        # shim must beat /usr/bin/x
 
 ```sh
 ~/bin/devtunnel user login -b -e                     # browser + Entra; see below
+```
+
+Then, **once per account — not once per machine**:
+
+```sh
 ~/bin/devtunnel create teams-bridge -a               # -a = anonymous; Teams needs it
 ~/bin/devtunnel port create teams-bridge -p 3978
 ```
+
+> **On a second machine, skip both `create` commands.** The tunnel is an account-level
+> object, so it already exists and already has its port. Running `create` again gives
+> you:
+>
+> ```
+> Tunnel service error: Conflict with existing entity. Retry tunnel operation.
+> ```
+>
+> which is the tunnel saying *"I already exist"* — so it is really confirmation you are
+> on the right account. **Ignore the "Retry" advice; retrying can never succeed.** Go
+> straight to `~/bin/devtunnel host teams-bridge`.
 
 > **Don't reach for `-d` (device code) when the browser hangs.** It is the obvious next
 > move and it fails differently: sign-in succeeds, then Conditional Access rejects it
@@ -369,17 +386,43 @@ Power Automate changes, and thread ids still derive to the same session ids.
 > Recovery is to kill and restart that machine's tunnel session. See
 > [FINDINGS §20](docs/FINDINGS.md).
 
-So a move is only: the [tunnel CLI](#2-tunnel) (install, `libicu-dev`, the `xdg-open`
-shim, then `~/bin/devtunnel user login -b -e` — but **not** `create`, the tunnel already
-exists), `npm install` (node >= 22.12), your
-[configuration](#configuration) and [secrets](#the-two-secrets), and a **global** git
-identity on the new box (`git config --global user.name / user.email`) — that missing
-identity is the classic trap, surfacing as a failed commit minutes into a turn rather
-than at startup.
+So a move is only: the [tunnel CLI](#2-tunnel), `npm install`, your
+[configuration](#configuration) and [secrets](#the-two-secrets), and a git identity.
+End to end on the new box:
+
+```sh
+# 0. on the OLD box first - a second host evicts it silently
+tmux kill-session -t tunnel
+
+# 1. tunnel CLI
+curl -sL https://aka.ms/DevTunnelCliInstall | bash
+chmod +x ~/bin/devtunnel
+sudo apt install -y libicu-dev
+cat > ~/bin/xdg-open <<'EOF'
+#!/usr/bin/env bash
+exec powershell.exe -NoProfile -Command "Start-Process '$1'"
+EOF
+chmod +x ~/bin/xdg-open
+export PATH="$HOME/bin:$PATH"
+~/bin/devtunnel user login -b -e          # NOT -d, and do NOT run `create`
+~/bin/devtunnel show teams-bridge         # should print the tunnel and its port
+
+# 2. the bridge
+git clone https://github.com/arajawat/code-from-teams.git
+cd code-from-teams && npm install         # node >= 22.12
+cp bridge.config.example.json bridge.config.json && $EDITOR bridge.config.json
+git config --global user.name "Your Name" && git config --global user.email "you@example.com"
+
+# 3. run it (secrets exported in the bridge shell)
+tmux new -d -s tunnel '~/bin/devtunnel host teams-bridge'
+tmux new -d -s bridge 'cd ~/code-from-teams && npm run bridge'
+```
 
 Sign in with the **same account** the tunnel belongs to — `~/bin/devtunnel user show`
 on the old box tells you which. A different account authenticates fine and then simply
-cannot see `teams-bridge`.
+cannot see `teams-bridge`. The missing **global** git identity is the classic trap: it
+surfaces as a failed commit minutes into a turn rather than at startup, so the startup
+banner checks it for you.
 
 Thread memory lives in `~/.copilot/session-state/teams-*`. Copy it to bring
 conversations along; skip it and threads degrade gracefully to fresh ones.

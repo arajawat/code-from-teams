@@ -314,6 +314,14 @@ rights.
    device code is usually blocked by Conditional Access in a managed tenant, and worse,
    *starting* one clears the credential you already had even if you abort — a running
    host keeps serving, so you don't find out until the next restart. See §21.
+22. **`create` is once per *account*, not once per machine — and re-running it gives
+   advice that cannot work.** On a second machine, `devtunnel create teams-bridge`
+   fails with `Conflict with existing entity. Retry tunnel operation.` The "Retry"
+   suggestion is actively misleading: this is not a transient conflict, the entity
+   permanently exists, and no number of retries will change that. Read it as *"I
+   already exist"* — it is really confirmation you are signed into the correct account,
+   because a wrong account would not see a conflict at all. Skip both `create` and
+   `port create`, and go straight to `devtunnel host teams-bridge`.
 
 ---
 
