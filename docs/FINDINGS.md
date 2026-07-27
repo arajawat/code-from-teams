@@ -306,6 +306,14 @@ rights.
    Recovery is to kill and restart the tunnel's tmux session. Practical rule: **only
    one machine hosts at a time.** Stop the old host before starting the new one, and
    treat "let me just host it on the new box to check" as an outage on the old one.
+21. **`devtunnel user login` hangs forever on WSL with no output at all.** It defaults
+   to browser auth and calls `xdg-open`, which exists on WSL but has no handler behind
+   it — so it exits `0` having done nothing and the CLI waits for a callback nobody
+   will make. Install an `xdg-open` shim that calls `powershell.exe Start-Process` (or
+   install `wslu`), then `devtunnel user login -b -e`. **Do not fall back to `-d`**:
+   device code is usually blocked by Conditional Access in a managed tenant, and worse,
+   *starting* one clears the credential you already had even if you abort — a running
+   host keeps serving, so you don't find out until the next restart. See §21.
 
 ---
 
@@ -982,3 +990,71 @@ Worth holding together, because they point at different causes:
 The middle one is the confusing one in normal operation. The last one only happens when
 two machines are involved, which is exactly when you are least likely to suspect the
 tunnel.
+
+## 21. Signing in from WSL, where both auth paths fail
+
+Setting up a second machine, `devtunnel user login` hung with **no output whatsoever**
+and never returned. Both of the CLI's sign-in methods fail on a Cloud PC in a managed
+tenant, and they fail for unrelated reasons — so the obvious escape from the first lands
+you in the second.
+
+### Browser auth (the default) hangs silently
+
+`devtunnel user login` defaults to `-b, --use-browser-auth`. Run with `-v`, MSAL says:
+
+```
+MSAL: Using system browser.
+MSAL: [DefaultOsBrowser] Authorization URI with form_post: https://login.microsoftonline.com/...
+```
+
+It calls `xdg-open` and waits for a redirect to `localhost:41443`. **`xdg-open` exists on
+WSL but has no browser handler behind it, so it exits `0` having done nothing.** The
+success code is the whole problem: nothing in the chain reports an error, so the CLI sits
+waiting for a callback that no one will ever make. Zero output, forever.
+
+### Device code fails at the tenant
+
+The obvious next move is `-d`. It gets further — a code appears, sign-in succeeds — and
+then Entra refuses:
+
+> Your sign-in was successful but does not meet the criteria to access this resource.
+
+That is Conditional Access. The device-code flow is commonly blocked outright in a
+managed tenant, and no amount of retrying changes it. **This path is a dead end, not a
+slow path.**
+
+### The fix: repair `xdg-open`, don't route around it
+
+```sh
+cat > ~/bin/xdg-open <<'SH'
+#!/usr/bin/env bash
+exec powershell.exe -NoProfile -Command "Start-Process '$1'"
+SH
+chmod +x ~/bin/xdg-open
+export PATH="$HOME/bin:$PATH"        # must come before /usr/bin/xdg-open
+~/bin/devtunnel user login -b -e
+```
+
+WSL interop hands the URL to a Windows browser; WSL2 forwards `localhost`, so MSAL's
+redirect arrives normally. Installing `wslu` (which provides `wslview` and registers it
+as a handler) achieves the same thing.
+
+This is the better fix because it repairs the mechanism rather than the symptom.
+Anything else on the box that shells out to `xdg-open` now works too. The alternative
+considered and discarded was scraping the authorization URL out of `-v` log output and
+opening it manually — it works, but it depends on MSAL's log format and fixes exactly
+one command.
+
+### A sharp edge worth knowing
+
+**Starting a device-code login logs you out of the session you already had, even if you
+abort it.** The stored credential is cleared when the flow *starts*, not when it
+succeeds. Observed directly: `devtunnel user show` reported a valid login, two
+device-code attempts were started and abandoned, and `user show` then reported
+`Not logged in`.
+
+A running `devtunnel host` keeps serving throughout, because its relay connection is
+already established and is not re-authenticated. So the machine looks completely healthy
+and the breakage only surfaces the next time the tunnel is restarted — possibly days
+later, with no obvious connection to what caused it. Check `devtunnel user show` after
+any interrupted login.

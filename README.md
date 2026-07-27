@@ -86,11 +86,39 @@ The bridge listens on `:3978` and needs a public HTTPS URL.
 curl -sL https://aka.ms/DevTunnelCliInstall | bash   # lands at ~/bin/devtunnel
 chmod +x ~/bin/devtunnel                             # the installer's sudo step fails
 sudo apt install -y libicu-dev                        # required; it's a .NET binary
+```
 
-~/bin/devtunnel user login
+**On WSL, install a browser shim before logging in.** Sign-in opens a browser, which
+WSL cannot do, so the login hangs forever printing nothing at all:
+
+```sh
+cat > ~/bin/xdg-open <<'EOF'
+#!/usr/bin/env bash
+exec powershell.exe -NoProfile -Command "Start-Process '$1'"
+EOF
+chmod +x ~/bin/xdg-open
+export PATH="$HOME/bin:$PATH"                        # shim must beat /usr/bin/xdg-open
+```
+
+`wslu` (which provides `wslview`) does the same job if you'd rather install a package.
+
+```sh
+~/bin/devtunnel user login -b -e                     # browser + Entra; see below
 ~/bin/devtunnel create teams-bridge -a               # -a = anonymous; Teams needs it
 ~/bin/devtunnel port create teams-bridge -p 3978
 ```
+
+> **Don't reach for `-d` (device code) when the browser hangs.** It is the obvious next
+> move and it fails differently: sign-in succeeds, then Conditional Access rejects it
+> with *"your sign-in was successful but does not meet the criteria to access this
+> resource"*. In a managed tenant the device-code flow is commonly blocked outright.
+> Browser auth with the shim is the path that works — fix the browser, don't route
+> around it.
+>
+> **Worse, starting a device-code login logs you out of the one you already had**, even
+> if you abort it — the stored credential is cleared up front, not on success. A
+> running `devtunnel host` keeps serving because its relay connection is already
+> established, so nothing appears wrong until the next restart fails to authenticate.
 
 > **Call it by full path.** Ubuntu's `~/.profile` only adds `~/bin` to `PATH` if that
 > directory **already existed when you logged in** — and the installer creates it
@@ -341,13 +369,17 @@ Power Automate changes, and thread ids still derive to the same session ids.
 > Recovery is to kill and restart that machine's tunnel session. See
 > [FINDINGS §20](docs/FINDINGS.md).
 
-So a move is only: the [tunnel CLI](#2-tunnel) (install, `libicu-dev`,
-`~/bin/devtunnel user login` — but **not** `create`, the tunnel already exists),
-`npm install` (node >= 22.12), your
+So a move is only: the [tunnel CLI](#2-tunnel) (install, `libicu-dev`, the `xdg-open`
+shim, then `~/bin/devtunnel user login -b -e` — but **not** `create`, the tunnel already
+exists), `npm install` (node >= 22.12), your
 [configuration](#configuration) and [secrets](#the-two-secrets), and a **global** git
 identity on the new box (`git config --global user.name / user.email`) — that missing
 identity is the classic trap, surfacing as a failed commit minutes into a turn rather
 than at startup.
+
+Sign in with the **same account** the tunnel belongs to — `~/bin/devtunnel user show`
+on the old box tells you which. A different account authenticates fine and then simply
+cannot see `teams-bridge`.
 
 Thread memory lives in `~/.copilot/session-state/teams-*`. Copy it to bring
 conversations along; skip it and threads degrade gracefully to fresh ones.
