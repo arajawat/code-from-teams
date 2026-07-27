@@ -361,3 +361,64 @@ lock and the flow POST are all proven. Only `runScenario()` is fake.
 Two things that would be tempting to skip and shouldn't be: the milestone posts (item 4)
 and the question timeout (item 5). The first is what makes the system feel alive; the
 second is what stops one unanswered question from bricking it.
+
+---
+
+## 11. Yolo mode: what it does and does not cover
+
+The bridge auto-approves every tool by default. A permission prompt nobody can see is
+just a hang, and the person driving this is in a car.
+
+**Proven, not assumed.** A task that wrote a test file, ran node's test runner and made
+a git commit produced **11 permission requests, all auto-approved, nothing blocked** —
+9 tests passing and a commit on disk.
+
+### Not all handlers behave the same when omitted
+
+This matters because omitting `onPermissionRequest` silently hangs the agent, so the
+obvious worry is that the other request handlers hide the same trap. They do not, and
+the reason is a one-word difference in the docs:
+
+| Handler | Omitted behaviour | Blocks? |
+|---|---|---|
+| `onPermissionRequest` | *"surfaced as events and **left pending**"* | **yes** — must provide |
+| `onElicitationRequest` | *"**when provided**, enables …"* | no — capability stays off |
+| `onExitPlanModeRequest` | *"**when provided**, enables …"* | no |
+| `onAutoModeSwitchRequest` | *"**when provided**, enables …"* | no |
+| `onUserInputRequest` | *"**when provided**, enables the ask_user tool"* | no — but we want it |
+
+So leaving elicitation, exit-plan-mode and auto-mode-switch unset is the **correct**
+yolo-safe posture, not an oversight: the agent never issues those requests, so they can
+never stall the pipe. Providing them would *enable* dialogs we cannot render in a Teams
+thread. This is written down mainly so nobody later "fixes" the omission and breaks it.
+
+### Yolo is not the same as silencing the agent
+
+Two different things travel under the same word:
+
+- **Permission prompts** — *"may I edit this file?"* Noise on a phone. Auto-approved.
+- **Design questions** — *"which of these three approaches do you want?"* The entire
+  point of the product. Kept.
+
+Turning off `onUserInputRequest` would technically be "more yolo" and would gut the
+thing we built.
+
+### Enterprise policy can cap it, silently
+
+`session.managed_settings_resolved` carries `bypassPermissionsDisabled`. When set,
+enterprise policy restricts bypass-permissions mode, and the symptom is the agent
+stalling on its first tool call for no visible reason. The bridge logs the flag at
+session start and logs `session.managed_settings_enforced` if policy ever blocks
+something. Nothing was capped in this tenant.
+
+### The audit trail
+
+Every permission variant carries a human-readable `intention`, and shell requests carry
+the exact command — much more reviewable than a tool name:
+
+```json
+{"kind":"permission","decision":"approve","permissionKind":"shell",
+ "intention":"Show latest commit","detail":"git --no-pager log --oneline -1"}
+```
+
+With auto-approval on, this log is the only record of what the agent did on your behalf.
