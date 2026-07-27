@@ -219,6 +219,11 @@ tmux send-keys -t bridge "cd $PWD && npm run bridge" Enter
 tmux ls                                              # BOTH must be listed
 ```
 
+The trailing **`Enter` is a literal argument**, not an instruction to you — it is tmux's
+name for the Return key, telling tmux to submit the command inside the pane. Leave it
+off and the text is typed at the prompt and never runs, while `tmux ls` still lists a
+perfectly healthy-looking session.
+
 Then **read the banner** — `tmux capture-pane -p -t bridge`. It prints `HMAC`,
 `outbound flow` and `allowlist` lines precisely so that a bridge running wide open is
 visible rather than assumed. `HMAC OFF` on a public tunnel with yolo on means anyone who
