@@ -125,6 +125,18 @@ Then, **once per account — not once per machine**:
 > on the right account. **Ignore the "Retry" advice; retrying can never succeed.** Go
 > straight to `~/bin/devtunnel host teams-bridge`.
 
+> **Always name the tunnel when hosting.** `devtunnel host` with *no* id silently
+> creates a **new** tunnel — the CLI's own help says "if tunnel ID is not specified a
+> new tunnel will be created". So `devtunnel host -p 3978` starts fine, prints a
+> healthy public URL, and that URL is not the one your Teams webhook points at.
+> Messages then simply never arrive, with nothing anywhere reporting a problem.
+>
+> **Ctrl+C on `devtunnel host teams-bridge` is safe** and is the normal way to stop it.
+> It ends the hosting process only — the tunnel, its URL and its port survive, because
+> they belong to your account. The public URL just has no host until you start one
+> again (which looks like the ~15s hang and empty 200 above). Run it under tmux so it
+> also survives closing the terminal.
+
 > **Don't reach for `-d` (device code) when the browser hangs.** It is the obvious next
 > move and it fails differently: sign-in succeeds, then Conditional Access rejects it
 > with *"your sign-in was successful but does not meet the criteria to access this

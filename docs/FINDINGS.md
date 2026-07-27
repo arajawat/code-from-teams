@@ -341,6 +341,20 @@ rights.
    not evidence about what the bridge will get. Check with `bash -lic 'node -v'` and fix
    with `nvm alias default 22`.
 
+27. **`devtunnel host` with no tunnel id creates a brand new tunnel every time.** The
+   CLI says so in one line of its own help - *"Host a tunnel, if tunnel ID is not
+   specified a new tunnel will be created"* - and the consequence is severe: `devtunnel
+   host -p 3978` looks like the obvious way to start hosting, works perfectly, prints a
+   healthy-looking public URL, and that URL is **not the one your Teams webhook points
+   at**. Nothing is broken and nothing complains; messages simply never arrive. Always
+   name the tunnel: `devtunnel host teams-bridge`.
+
+   Ctrl+C on a *named* host is safe and is the normal way to stop it. It ends the
+   hosting process only - the tunnel, its id, its URL and its port configuration are
+   account-level and survive, so Teams and Power Automate need no changes. The only
+   effect is that the public URL has no host until you start one again, which presents
+   as the ~15s hang and empty 200 in section 20.
+
 26. **A broad ignore pattern can silently exclude the template your own setup
    instructions depend on.** `.gitignore` held `.env` and `.env.*`, and the second
    pattern also matched **`.env.example`** — so the template was never committed, and
