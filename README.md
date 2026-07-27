@@ -87,10 +87,16 @@ curl -sL https://aka.ms/DevTunnelCliInstall | bash   # lands at ~/bin/devtunnel
 chmod +x ~/bin/devtunnel                             # the installer's sudo step fails
 sudo apt install -y libicu-dev                        # required; it's a .NET binary
 
-devtunnel user login
-devtunnel create teams-bridge -a                     # -a = anonymous; Teams needs it
-devtunnel port create teams-bridge -p 3978
+~/bin/devtunnel user login
+~/bin/devtunnel create teams-bridge -a               # -a = anonymous; Teams needs it
+~/bin/devtunnel port create teams-bridge -p 3978
 ```
+
+> **Call it by full path.** Ubuntu's `~/.profile` only adds `~/bin` to `PATH` if that
+> directory **already existed when you logged in** — and the installer creates it
+> mid-session, so a bare `devtunnel` gives `command not found` until you log out and
+> back in. Full paths sidestep it entirely, which is why every command here uses one.
+> To get the short name now: `export PATH="$HOME/bin:$PATH"`.
 
 The name makes the URL stable, so the webhook callback is set once. The tunnel belongs
 to your **account, not your machine** — see [Another machine](#another-machine).
@@ -198,7 +204,8 @@ curl -s -m 15 -o /dev/null -w '%{http_code} in %{time_total}s\n' \
 |---|---|
 | fast `200` | healthy — the probe is unsigned, so rejecting it is correct |
 | fast `502` | tunnel up, **bridge down** |
-| ~15s, empty body | **tunnel down** |
+| ~15s, empty body | **tunnel down** — no host at all |
+| ~20s, `000` (no response) | **another machine took the tunnel over** — see [§20](docs/FINDINGS.md) |
 
 > WSL can shut down when the last terminal closes, killing tmux with it. Keep one
 > terminal open, or `sudo loginctl enable-linger $USER`.
@@ -324,11 +331,19 @@ When you need a decision, ask one question with numbered options.
 
 ## Another machine
 
-The dev tunnel is an **account-level object**, so `devtunnel host teams-bridge` from any
-box signed into the same account serves the *same URL*. Nothing in Teams or Power
-Automate changes, and thread ids still derive to the same session ids.
+The dev tunnel is an **account-level object**, so `~/bin/devtunnel host teams-bridge`
+from any box signed into the same account serves the *same URL*. Nothing in Teams or
+Power Automate changes, and thread ids still derive to the same session ids.
 
-So a move is only: `npm install` (node >= 22.12), `devtunnel user login`, your
+> **Only one machine can host at a time.** Starting a host on the new box **silently
+> evicts** the old one — and the evicted side never reconnects, while its tmux session,
+> its process and `devtunnel show` all still look healthy. Stop the old host first.
+> Recovery is to kill and restart that machine's tunnel session. See
+> [FINDINGS §20](docs/FINDINGS.md).
+
+So a move is only: the [tunnel CLI](#2-tunnel) (install, `libicu-dev`,
+`~/bin/devtunnel user login` — but **not** `create`, the tunnel already exists),
+`npm install` (node >= 22.12), your
 [configuration](#configuration) and [secrets](#the-two-secrets), and a **global** git
 identity on the new box (`git config --global user.name / user.email`) — that missing
 identity is the classic trap, surfacing as a failed commit minutes into a turn rather

@@ -285,6 +285,27 @@ rights.
    A whole class of bug: **setup instructions written from one machine are untested
    until a second machine runs them.** Anything version-specific in a runbook is a
    latent failure that only surfaces at the least convenient moment.
+19. **`devtunnel` is not on `PATH` after install.** The installer drops it at
+   `~/bin/devtunnel`, and Ubuntu's `~/.profile` adds `~/bin` to `PATH` **only if that
+   directory already existed at login** — the installer creates it mid-session, so a
+   bare `devtunnel` gives `command not found` until you log out and back in. Call it by
+   full path. Worth noting *how* this survived: the tmux commands always used
+   `~/bin/devtunnel`, so the working system never exercised the broken instruction, and
+   it was wrong on the machine it was written on too. **A runbook step that your own
+   running setup never executes is not verified by that setup working.**
+20. **A tunnel hosts from one machine only — a second host silently evicts the first,
+   and the first never comes back.** This is the nastiest failure on the list because
+   every indicator lies. The evicted machine's log says
+   `Connection to host tunnel relay closed. Another host for the tunnel has connected.`
+   and then nothing: the process stays alive, the tmux session stays alive, `ps` shows
+   it running. `devtunnel show` reports `Host connections: 1` throughout — the counter
+   never reveals a conflict, because from the service's view there genuinely is one
+   host, just not the one you think. Killing the second host does **not** hand the
+   tunnel back; the public URL then times out entirely (`000`, no response), which is
+   a *third* distinct failure signature on top of the fast-502 and the empty-200.
+   Recovery is to kill and restart the tunnel's tmux session. Practical rule: **only
+   one machine hosts at a time.** Stop the old host before starting the new one, and
+   treat "let me just host it on the new box to check" as an outage on the old one.
 
 ---
 
@@ -783,7 +804,7 @@ Ports     : 3978  https://<your-tunnel>.devtunnels.ms/
 Expiration: 30 days
 ```
 
-`devtunnel host teams-bridge` from any machine signed into the same account serves
+`~/bin/devtunnel host teams-bridge` from any machine signed into the same account serves
 that same URL. So Teams, the webhook secret, and the Power Automate flow are all
 untouched by a move. Thread ids are unchanged too, so derived session ids still line up.
 
@@ -795,7 +816,7 @@ What genuinely has to be redone on a new box:
 | Copilot auth | `copilot login`, **or headless** via `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN` |
 | `gh auth login` | for push and PR creation |
 | **global git identity** | the §14 landmine — set it globally on a fresh box |
-| devtunnel install + `devtunnel user login` | `libicu-dev` needed on Ubuntu — **not** a pinned `libicu<NN>`, see landmine 18 |
+| devtunnel install + `~/bin/devtunnel user login` | `libicu-dev` needed on Ubuntu — **not** a pinned `libicu<NN>`, see landmine 18. Call it by full path, see landmine 19 |
 | `bridge.config.json` | gitignored, recreate from the example |
 | the two secrets | exported into the bridge shell |
 
@@ -908,3 +929,56 @@ are recoverable by anyone who can read the repo. That is an accepted risk *becau
 repo is private*. Making it public would need a history rewrite first — and that is
 exactly the decision that is easy to forget six months later, which is why it is written
 down here rather than left as a good intention.
+
+## 20. One tunnel, one host — measured
+
+The tunnel being an account-level object (§17) is what makes moving machines easy. It
+also creates the one genuinely dangerous move in this system, and it was worth testing
+rather than assuming.
+
+**Test:** with the tunnel healthily hosted from machine A, start a second host against
+the same tunnel.
+
+**Result:** the second host connects and reports `Ready to accept connections`. The
+first is evicted:
+
+```
+ClientSSH: PortForwardingService connection to localhost:3978 failed: Connection refused
+Connection to host tunnel relay closed. Another host for the tunnel has connected.
+```
+
+Then, killing the second host does **not** return the tunnel to the first. The public
+URL times out completely — `000`, no response at all after 20s.
+
+Every signal you would normally trust is wrong at once:
+
+| what you would check | what it says | truth |
+|---|---|---|
+| `tmux ls` | session alive | serving nothing |
+| `ps` | process running | disconnected from the relay |
+| `devtunnel show` | `Host connections: 1` | 1, but not *your* host |
+| the pane log | the eviction line, once, then silence | the only honest signal, and only if you look |
+
+`Host connections: 1` is the trap. It looks like confirmation. It stays 1 whether you
+are the host or someone else is.
+
+### The rule
+
+**Only one machine hosts at a time.** Moving boxes means stopping the old host *before*
+starting the new one — and "let me just host it on the new machine to check it works" is
+an outage on the old machine, not a test. Recovery is to kill and restart the tunnel's
+tmux session; the evicted process will sit there looking healthy forever otherwise.
+
+### Three failure signatures, all different
+
+Worth holding together, because they point at different causes:
+
+| symptom | cause |
+|---|---|
+| fast `502` (~0.8s) | tunnel up, bridge down — the honest one |
+| ~15s hang, empty `200` | no host at all |
+| ~20s timeout, `000` | host evicted by another machine |
+
+The middle one is the confusing one in normal operation. The last one only happens when
+two machines are involved, which is exactly when you are least likely to suspect the
+tunnel.
