@@ -720,3 +720,27 @@ volume when this eventually moves into a container (§16, stage 3).
 **The real expiry risk:** the tunnel has a 30-day expiration. If it lapses, the URL
 changes and the Teams webhook *does* have to be updated by hand. That, not the machine
 move, is the thing to watch.
+
+### Two corrections to the above
+
+The first draft of this runbook had two holes, both caught on review.
+
+**1. There is nothing to clone.** This repo has no remote — it exists only on the
+machine it was written on. "Move to another devbox" quietly assumed a step that does
+not exist yet. Worth stating plainly because it is a bus-factor problem, not just a
+portability one: 16 commits of findings live in exactly one place.
+
+```sh
+gh repo create code-from-teams --private --source=. --remote=origin --push
+```
+
+**2. Two tmux sessions, not one.** The runbook showed only the bridge. The tunnel needs
+its own session because `devtunnel host` exits with its terminal (landmine 11), and a
+dead tunnel is the single worst failure mode in this system: Teams times out and blames
+the webhook, while the bridge log stays completely empty. Anything that makes it easier
+to forget the tunnel is a real hazard, including a runbook that does not mention it.
+
+```sh
+tmux new -s tunnel     # devtunnel host teams-bridge
+tmux new -s bridge     # node scripts/bridge.js
+```

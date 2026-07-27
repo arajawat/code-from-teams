@@ -176,8 +176,9 @@ a machine one**. Hosting `teams-bridge` from a different box with the same accou
 serves the *same URL*, so Teams and Power Automate need no changes at all.
 
 ```sh
-# 1. code
-git clone <this repo> && cd code-from-teams && npm install     # needs node >= 22.12
+# 1. code  (see "Getting the code onto a new box" below - this repo needs a remote first)
+git clone git@github.com:<you>/code-from-teams.git
+cd code-from-teams && npm install                              # needs node >= 22.12
 
 # 2. copilot auth - headless, no browser needed on a devbox
 export GH_TOKEN=<token>        # or COPILOT_GITHUB_TOKEN / GITHUB_TOKEN
@@ -188,20 +189,34 @@ gh auth login                  # for git push / gh pr create
 git config --global user.name  "Your Name"
 git config --global user.email "you@example.com"
 
-# 4. tunnel - same account, same URL, nothing to update in Teams
+# 4. devtunnel install + sign in (same account = same URL, nothing to change in Teams)
 devtunnel user login
-devtunnel host teams-bridge
 
 # 5. settings
 cp bridge.config.example.json bridge.config.json && $EDITOR bridge.config.json
 
-# 6. secrets, in the bridge shell only
+# 6. TWO tmux sessions - the tunnel needs its own, and it dies with its terminal
+tmux new -s tunnel        # inside:  devtunnel host teams-bridge
+tmux new -s bridge        # inside:  the two exports below, then node scripts/bridge.js
+
+# 7. secrets, in the bridge shell only - never on disk
 read -rs TEAMS_WEBHOOK_SECRET && export TEAMS_WEBHOOK_SECRET
 read -rs TEAMS_FLOW_URL       && export TEAMS_FLOW_URL
-
-# 7. go
-tmux new -s bridge
 node scripts/bridge.js
+```
+
+**Both sessions are required.** The tunnel is not a background service — `devtunnel host`
+exits when its terminal goes away, and a dead tunnel does not fail loudly. Teams times
+out and blames the webhook while the bridge log stays completely empty. If the bridge log
+is empty, the problem is never in the bridge.
+
+### Getting the code onto a new box
+
+This repo starts life with **no remote** — it only exists where it was written. Give it
+one before you rely on being able to move:
+
+```sh
+gh repo create code-from-teams --private --source=. --remote=origin --push
 ```
 
 Copilot auth accepts fine-grained PATs with **Copilot Requests** permission, OAuth
