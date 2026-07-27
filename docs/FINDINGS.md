@@ -40,6 +40,7 @@ Bridge (node, :3978, exposed via tunnel)
       │  verify HMAC → allowlist check → derive sessionId → ack inside 5s
       ▼
 Copilot SDK session  (cwd = repo clone, resumed by caller-supplied id)
+      │  model + effort + voice prompt, set on BOTH create and resume
       │  milestones, questions, final result
       ▼
 Power Automate flow  →  "Reply with a message in a channel"  →  SAME thread
@@ -50,6 +51,10 @@ Two long-lived listeners on one machine: the bridge and the tunnel.
 **Inbound** is the Teams outgoing webhook. **Outbound** (anything after the 5-second
 window) is a Power Automate flow. They are different mechanisms — this asymmetry is the
 single most important thing to understand about the system.
+
+Everything that is not a secret is a file you edit and reload: `bridge.config.json` for
+which repo, model, effort and allowlist, and `prompts/teams-voice.md` for how the replies
+sound. Secrets stay in the environment and are stripped before the agent is spawned.
 
 ---
 
@@ -221,9 +226,13 @@ rights.
    blanked.
 8. **Omitting `onPermissionRequest` does not auto-approve** — requests are left
    *pending*, so the agent hangs on its first tool call. Pass `approveAll` explicitly.
-9. **Secrets leak through the agent's shell.** `TEAMS_WEBHOOK_SECRET` lives in the
-   bridge environment, which tool calls inherit. One `env` would post it into Teams.
-   Use `secret-env-vars`.
+9. **Secrets leak through the agent's shell.** `TEAMS_WEBHOOK_SECRET` and
+   `TEAMS_FLOW_URL` live in the bridge environment, which spawned tool calls inherit.
+   One `env` would post them into Teams. **`secret-env-vars` is a CLI setting and does
+   not exist in the SDK** — do not go looking for it. Strip them from the environment
+   the agent is spawned into instead: copy `process.env`, `delete` both keys, pass the
+   copy as `env` on `CopilotClient`. A wall, not a filter — the agent cannot print what
+   it was never given.
 10. **A dead tunnel does not fail fast.** If `devtunnel host` isn't running, the public
    URL still resolves — requests hang ~15s and return **HTTP 200 with an empty body**,
    so it looks like a slow app rather than a missing tunnel. Teams gives up at 5s and
@@ -236,6 +245,25 @@ rights.
 12. **Question timeout is non-negotiable.** A parked question holds the turn open, and
    the global serialize lock allows one turn at a time — so one unanswered question
    blocks the entire bridge forever. Walking away mid-question is the normal case.
+13. **The global git identity is often unset**, and a repo-local one hides it. The agent
+   works for minutes, runs `git commit`, and hits *"Please tell me who you are"* buried
+   in tool output — indistinguishable from the agent deciding not to commit. Validate
+   `user.name`/`user.email` at **startup**, not at commit time.
+14. **Model and reasoning effort must be set on resume, not just create.** They live on
+   `SessionConfigBase`, which both `SessionConfig` and `ResumeSessionConfig` extend. A
+   thread resumes on every turn after the first, so setting them only on create gives
+   you one good turn and then a silent drop back to the default — which is `medium`,
+   not the model default you assumed.
+15. **`aadObjectId` casing is not guaranteed.** GUIDs compared case-sensitively will
+   lock you out of your own bridge with a rejection message that explains nothing.
+   Lowercase both sides.
+16. **The tunnel's 30-day expiry is inactivity-based, not absolute.** Good news for
+   normal use — the clock never starts. Bad news for a long pause: let it lapse and the
+   URL changes, which means editing the Teams webhook by hand.
+17. **`session.idle` is an event, not a state to poll**, and the assistant's text is at
+   `data.content` — there is no `.text`. Both are written down elsewhere in these docs
+   and I still got them wrong writing a throwaway probe. Copy the bridge's event loop;
+   do not reconstruct it from memory.
 
 ---
 
@@ -261,21 +289,23 @@ nothing else.
 | # | Risk | How it was closed |
 |---|---|---|
 | R1 | Can we post into an *existing* thread later? | `Reply with a message in a channel` + `Message Id` = thread root. Landed in-thread. |
-| R5 | Tunnel URL churn / dies with the IDE | Named `devtunnel` (`teams-bridge`) under tmux. Stable URL, 1.2s round trip. |
+| R2 | **Security.** HMAC proves the message came from Teams, *not* who sent it. | `aadObjectId` allowlist, on and enforced before anything else (`bridge.js:468`, ahead of the busy check). Append-only JSONL audit of **every** inbound message, accepted or not. Secrets deleted from the agent's spawn environment. Fail-closed: no `aadObjectId` means rejected. |
+| R3 | Long threads exhaust the context window | `infiniteSessions: { enabled: true }` from the first line of real code, never retrofitted. |
+| R4 | Crash mid-turn = permanent silence after "on it 👍" | Turn timeout (30 min, credited back for time spent waiting on a human) rejects into the same catch that posts `That turn failed: …` to the thread. Failure is always audible. |
+| R5 | Tunnel URL churn / dies with the IDE | Named `devtunnel` (`teams-bridge`) under tmux. Stable URL, 1.2s round trip. Later found to be an *account-level* object, so it survives a machine move too (§17). |
 | R6 | Can the agent ask a question and wait? | Live run: parked **159.0s**, answer routed correctly, delayed post 5 min later still in-thread. |
 | R7 | Flow auto-disabled by governance | Moved to the user's own Power Platform environment. 15/15 soak. |
 
 **Still open:**
 
-| # | Risk | Mitigation |
+| # | Risk | Status |
 |---|---|---|
-| R2 | **Security.** HMAC proves the message came from Teams, *not* who sent it. | `aadObjectId` allowlist (the only real control), private team of one, audit log of **every** message, branch protection as a server-side backstop. |
-| R3 | Long threads exhaust the context window | SDK `infiniteSessions` — enable from the start, not at 2am. |
-| R4 | Crash mid-turn = permanent silence after "on it 👍" | Turn timeout that posts a failure. |
-| — | **Prompt injection — residual, not solved** | The allowlist governs who *talks* to the agent, not what it *reads*. With tools auto-approved, a hostile string in a repo file, issue or fetched page can steer it using your credentials. Name it; don't pretend to have fixed it. Branch protection is the honest answer to "what stops a poisoned README pushing to main". |
+| — | **Prompt injection — residual, not solved** | The allowlist governs who *talks* to the agent, not what it *reads*. With tools auto-approved, a hostile string in a repo file, issue or fetched page can steer it using your credentials. Name it; don't pretend to have fixed it. |
+| — | **Branch protection — assumed, never verified** | It is the honest answer to "what stops a poisoned README pushing to `main`", and it is the backstop R2 leans on. It has not actually been checked on the target repo. The startup banner warns when a yolo agent is sitting on `main`/`master`, which is a reminder, not a control. |
 
-Every open risk is now on our side of the wire. Nothing left depends on Teams, Power
-Automate, or tenant policy.
+R2, R3 and R4 moved from open to closed during the build; the entries above describe
+what shipped, not what was planned. Every remaining risk is on our side of the wire —
+nothing depends on Teams, Power Automate, or tenant policy any more.
 
 ---
 
@@ -827,3 +857,33 @@ tmux capture-pane -p -t bridge | tail -30
 
 Attaching puts a live agent process one keystroke away from `Ctrl+C`. Reading the pane
 has no such failure mode, and it is what was used throughout this project.
+
+## 19. Auditing before you publish
+
+Pushing this to GitHub meant checking it did not carry secrets. Three things were worth
+learning.
+
+**Audit the history, not the working tree.** `git log -p` across every commit, not a
+scan of the current files. A secret deleted in a later commit is still sitting in the
+history, fully readable, and a clean working tree says nothing about that.
+
+**Know what a false positive looks like.** The scan flagged two long base64 strings that
+looked exactly like leaked keys. They were npm `sha512-` integrity hashes from the lock
+file. Anything that greps for high-entropy strings will find these; recognising them
+immediately is the difference between a five-minute check and an afternoon.
+
+**Not-a-credential is not the same as fine-to-publish.** Nothing in the repo could be
+used to authenticate as anyone, but two things still deserved redacting:
+
+| what | why it mattered |
+|---|---|
+| the live tunnel URL | not a secret, but a working address pointing at a yolo agent — an invitation to probe |
+| a real `aadObjectId` hardcoded in `fakemsg.js` | a colleague's directory identifier, published without asking them |
+
+Both were replaced with placeholders. Neither would have failed a secret scanner.
+
+**What is still true:** the pre-redaction commits remain in the history, so both values
+are recoverable by anyone who can read the repo. That is an accepted risk *because the
+repo is private*. Making it public would need a history rewrite first — and that is
+exactly the decision that is easy to forget six months later, which is why it is written
+down here rather than left as a good intention.

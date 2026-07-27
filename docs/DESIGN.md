@@ -1,6 +1,23 @@
 # Code from Teams — design (for review)
 
-State as of 2026-07-25. Only current conclusions; see plan.md for how we got here.
+> **This is a chronological log, not a current-state document.** Sections 1–7 are the
+> original design as of 2026-07-25; everything below them is dated build notes appended
+> in order. **Later entries supersede earlier ones and earlier entries are deliberately
+> not rewritten** — being able to see what we believed and when is the point.
+>
+> For current state, read [FINDINGS.md](FINDINGS.md) or the README instead.
+>
+> Known superseded claims, so nobody acts on them:
+>
+> | early claim | superseded by |
+> |---|---|
+> | use `secret-env-vars` to hide the secrets (§5, R2) | it does not exist in the SDK — strip them from the spawn env instead (see *Secrets kept away from the agent*) |
+> | one line in `AGENTS.md` for reply style (build order) | wrong home — use `systemMessage` (see *The voice prompt*) |
+> | R2/R3/R4 "open" (status blocks) | all three closed during the build — see FINDINGS §8 |
+> | the tunnel expires 30 days after creation | the 30 days is **inactivity**, a sliding window (see *Pause vs stop*) |
+
+State of sections 1–7 as of 2026-07-25. Only current conclusions; see plan.md for how we
+got here.
 
 ---
 
@@ -477,3 +494,121 @@ same silent-failure pattern as every other trap on this project. Verified in
 dist/generated/session-events.d.ts:3232.
 Also: sendAndWait can resolve UNDEFINED (on timeout / no final message), so the
 undefined case needs its own branch, not `?? ""`.
+
+## BRIDGE BUILT ON THE SDK (2026-07-27)
+scripts/bridge.js replaces the fake runScenario() in the harness. Everything the harness
+proved carried over unchanged: HMAC verify, toPlainText, threadRootOf, the parked
+question map, the serialize lock, the flow POST.
+
+sendAndWait NOT used. It has a 60-SECOND DEFAULT TIMEOUT, which is fatal here - the
+normal case is a human taking minutes to answer a parked question. Instead: subscribe to
+session events, session.send(prompt), then await the session.idle EVENT directly.
+  - `armed` flag guards against an idle fired before our send is registered.
+  - Promise.race([idle, turnGuard.promise]) so a hung turn cannot wait forever.
+  - session.idle is an EVENT. It is not a state you poll.
+
+## YOLO MODE (2026-07-27)
+onPermissionRequest returns approveAll(request, invocation) when YOLO, {kind:"deny"}
+otherwise. Every decision is audited with its kind + intention, so the log answers "what
+did it actually do" after the fact.
+
+DELIBERATELY NOT PROVIDED: onElicitationRequest, onExitPlanModeRequest,
+onAutoModeSwitchRequest, onMcpAuthRequest. This is not an oversight and it is the
+OPPOSITE of the onPermissionRequest rule. Permissions are raised regardless and left
+PENDING if unhandled (so omitting hangs the agent). These four are capability-gated -
+the typings say "when provided, enables the callback" - so omitting them means the agent
+never issues them and they can never block the bridge. Adding a handler would enable a
+dialog we have no way to render in a Teams thread.
+
+## MODEL AND EFFORT PINNED (2026-07-27)
+Question "which model am I actually running?" answered from
+~/.copilot/session-state/teams-*/events.jsonl, not from docs: claude-opus-5.
+The same journal showed defaultReasoningEffort: "medium" - so every run up to that point,
+including the 106s parked-question run, had been at medium. Nobody chose that.
+
+  ReasoningEffort (typings) = "low" | "medium" | "high" | "xhigh"
+  listModels() (runtime)    = ["low","medium","high","xhigh","max"]
+RUNTIME DISAGREES WITH THE TYPE. "max" exists and the type omits it. The bridge is plain
+JS so COPILOT_EFFORT=max is reachable, but only xhigh is verified end to end.
+
+Set on the SHARED config object, so it applies to resume as well as create. Both
+SessionConfig and ResumeSessionConfig extend SessionConfigBase, where these live. A
+thread resumes on every turn after the first - set them only on create and you get one
+good turn, then a silent fall back to medium. There is no public getReasoningEffort();
+verified by running a turn and grepping the journal for "reasoningEffort":"xhigh".
+
+## FIRST LIVE TEAMS RUN AGAINST THE REAL SDK (2026-07-27)
+7 tools auto-approved, question parked 48.5s, "lets do #1" routed as ANSWER and mapped
+onto the offered choice, turn complete at 91.7s. Real aadObjectId surfaced in the log,
+which is how the allowlist got populated.
+
+## ALLOWLIST ON (2026-07-27)
+Hardened BEFORE enabling: lowercase both sides, because aadObjectId GUID casing is not
+guaranteed and a mismatch locks you out with a message that explains nothing. Fail
+closed - a missing aadObjectId is rejected. Tested 4 cases on a throwaway bridge. The
+uppercase test is only meaningful because the allowlist check (line ~468) runs BEFORE
+the busy check (~488); otherwise a "busy" response would have masked the result.
+
+## SECRETS KEPT AWAY FROM THE AGENT (2026-07-27)
+The plan said use the CLI's secret-env-vars setting. IT DOES NOT EXIST IN THE SDK.
+Stronger fix: copy process.env, delete TEAMS_WEBHOOK_SECRET and TEAMS_FLOW_URL, pass the
+copy as `env` to CopilotClient. The yolo agent has a shell; it cannot print what it was
+never given. A wall, not a filter.
+
+## CONFIG FILE + RELOAD (2026-07-27)
+bridge.config.json (gitignored) + bridge.config.example.json + lib/config.js.
+Precedence env > file > default. Malformed JSON THROWS rather than falling back to
+defaults - a typo would otherwise silently point the agent at the wrong repo.
+scripts/reload.sh validates everything BEFORE stopping anything, then restarts inside
+the existing tmux window so the secrets never leave that shell.
+
+checkRepo() validates at startup: exists, is a git repo, HAS A GIT IDENTITY, has an
+origin, warns if a yolo agent is sitting on main/master.
+LANDMINE FOUND HERE: the global git identity on this machine is EMPTY. bridge-scratch
+had hidden it behind a local `t <t@t>`. On a fresh clone the agent would work for
+minutes and then fail its first commit, buried in tool output, looking exactly like it
+had chosen not to commit.
+
+## OLD THREADS RESUME - PROVEN (2026-07-27)
+Backdated a session 3 days, resumed it in a FRESH process, recalled both planted facts
+exactly. Nothing is stored anywhere: sessionId is derived from the thread root every
+time. 190 session dirs on disk, oldest 6 weeks, no TTL or cleanup config anywhere.
+resumeSession THROWS "Session not found" for unknown ids, so resume-or-create against
+the same derived id degrades a wiped session to a fresh one - never an error.
+
+## PORTABILITY (2026-07-27)
+The dev tunnel is an ACCOUNT-LEVEL object, not machine-level. Hosting it from another
+machine serves the SAME URL, so Teams, the webhook and the flow need no changes at all.
+The 30-day expiry is INACTIVITY-based (sliding window), so normal use never expires it;
+the exposure is a long pause, not a long life.
+Two errors in the first runbook, both caught by the user, both real: `git clone <repo>`
+was impossible because the repo had no remote, and the runbook showed one tmux session
+when the tunnel needs its own. Recorded as corrections rather than quietly patched.
+
+## PAUSE VS STOP - MEASURED (2026-07-27)
+  bridge down, tunnel up -> 502 in 0.8s, tunnel stays registered
+  tunnel down            -> ~15s hang, EMPTY 200
+=> to pause, KILL THE BRIDGE AND LEAVE THE TUNNEL UP. The 502 lands inside the 5s webhook
+window so Teams reports the failure immediately; the tunnel-down case blows the window
+and Teams blames the webhook while the bridge log sits empty. Keeping the tunnel hosted
+also keeps the inactivity clock from ever starting.
+
+## THE VOICE PROMPT - LAST OPEN ITEM (2026-07-27)
+Planned as one line in AGENTS.md. WRONG HOME: AGENTS.md lives in the TARGET repo, and the
+bridge points at any repo, so the rule would need copying into every repo and would be
+forgotten in most.
+Correct hook is systemMessage, which sits on SessionConfigBase - so, like model and
+effort, it is carried by BOTH create and resume:
+    config.systemMessage = { mode: "append", content: VOICE }
+"append" keeps every SDK guardrail. "replace" exists and its own docs say it removes ALL
+guardrails including security restrictions - not a trade worth making for tone of voice.
+Text lives in prompts/teams-voice.md so changing the agent's voice is editing markdown
+plus npm run reload.
+
+A/B, same model, same prompt ("write a debounce and show me the code"):
+    voice OFF   1460 chars   64 lines   code fence YES  -> pasted the implementation
+    voice ON     694 chars    5 lines   code fence NO   -> wrote it into the repo, ran
+                                                           the tests 18/18, described it
+                                                           in five sentences, offered to
+                                                           commit
+The SHAPE of the answer changes, not just the length. That is the product.

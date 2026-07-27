@@ -17,7 +17,9 @@ in a terminal.
 5-second window, auto-approved 7 tools, asked a question with options, **parked 48
 seconds** while the user was away, took `"lets do #1"` as the answer rather than a new
 prompt, and finished in 91 seconds. Reply to that thread days later and it still knows
-what you decided. See [docs/FINDINGS.md](docs/FINDINGS.md).
+what you decided. Replies are shaped for a phone, not a terminal — it writes code into
+the repo and tells you what changed, rather than pasting a diff at you.
+See [docs/FINDINGS.md](docs/FINDINGS.md).
 
 ---
 
@@ -31,6 +33,7 @@ Bridge (node, :3978, exposed via tunnel)
       │  verify HMAC → allowlist → derive sessionId → ack inside 5s
       ▼
 Copilot SDK session  (cwd = your repo, resumed by caller-supplied id)
+      │  pinned model + effort + voice prompt, on both create and resume
       │  milestones, questions, final result
       ▼
 Power Automate flow  →  "Reply with a message in a channel"  →  SAME thread
