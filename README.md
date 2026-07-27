@@ -85,7 +85,7 @@ The bridge listens on `:3978` and needs a public HTTPS URL.
 ```sh
 curl -sL https://aka.ms/DevTunnelCliInstall | bash   # lands at ~/bin/devtunnel
 chmod +x ~/bin/devtunnel                             # the installer's sudo step fails
-sudo apt install -y libicu78                         # required; it's a .NET binary
+sudo apt install -y libicu-dev                        # required; it's a .NET binary
 
 devtunnel user login
 devtunnel create teams-bridge -a                     # -a = anonymous; Teams needs it

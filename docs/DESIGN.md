@@ -15,6 +15,7 @@
 > | one line in `AGENTS.md` for reply style (build order) | wrong home — use `systemMessage` (see *The voice prompt*) |
 > | R2/R3/R4 "open" (status blocks) | all three closed during the build — see FINDINGS §8 |
 > | the tunnel expires 30 days after creation | the 30 days is **inactivity**, a sliding window (see *Pause vs stop*) |
+> | `apt install libicu78` (tunnel setup) | soname is release-specific and breaks on any other Ubuntu — use `libicu-dev` |
 
 State of sections 1–7 as of 2026-07-25. Only current conclusions; see plan.md for how we
 got here.
@@ -353,6 +354,11 @@ Install notes (WSL Ubuntu 26.04):
                                    # "Couldn't find a valid ICU package" without it.
                                    # DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 does NOT
                                    # work around it for this single-file build.
+  # LATER CORRECTION (2026-07-27): libicu78 is the Ubuntu 26.04 soname and does NOT
+  # exist on other releases - it failed on a 2nd machine with "no installation
+  # candidate", which reads like a withdrawn package rather than a renamed one.
+  # Use `sudo apt install -y libicu-dev`, which exists everywhere and depends on
+  # whichever libicuNN is right for that release.
 Named persistent tunnel (same URL every restart):
   devtunnel user login
   devtunnel create teams-bridge -a          # -a = allow anonymous; Teams needs it

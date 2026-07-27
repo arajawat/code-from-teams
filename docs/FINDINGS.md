@@ -172,9 +172,22 @@ with a looser DLP policy. Soak test then passed 15/15.
 and then its own `sudo` step fails. Harmless — `chmod +x` and carry on.
 
 The blocker is that `devtunnel` is a .NET app and will not start without ICU:
-`Couldn't find a valid ICU package`. On Ubuntu 26.04 that is
-`sudo apt install -y libicu78`. Setting `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1`, the
-usual workaround, does **not** help here.
+`Couldn't find a valid ICU package`.
+
+**Install `libicu-dev`, never `libicu<NN>`.** The runtime package carries a soname
+version that changes with every distro release — `libicu70` on Ubuntu 22.04, `libicu74`
+on 24.04, `libicu78` on 26.04 — so a pinned name works on exactly one release and fails
+on every other with `Package 'libicuNN' has no installation candidate`. That is a
+confusing error, because it reads like the package was withdrawn rather than renamed.
+`libicu-dev` exists on every Debian/Ubuntu release and depends on whichever runtime is
+correct there:
+
+```sh
+sudo apt install -y libicu-dev
+```
+
+Setting `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1`, the usual workaround for a .NET app
+with no ICU, does **not** help here.
 
 ### Repo has no branch protection
 `gh api repos/…/rules/branches/main` → `[]`. Classic protection returns 404, which is
@@ -264,6 +277,14 @@ rights.
    `data.content` — there is no `.text`. Both are written down elsewhere in these docs
    and I still got them wrong writing a throwaway probe. Copy the bridge's event loop;
    do not reconstruct it from memory.
+18. **Never pin a `libicu<NN>` version in setup instructions** — use `libicu-dev`. The
+   soname tracks the distro release (`libicu70` on 22.04, `libicu74` on 24.04,
+   `libicu78` on 26.04), so a version copied off a working machine fails on every other
+   one with `Package 'libicuNN' has no installation candidate` — which reads like the
+   package was withdrawn, not renamed, and sends you looking for a PPA you do not need.
+   A whole class of bug: **setup instructions written from one machine are untested
+   until a second machine runs them.** Anything version-specific in a runbook is a
+   latent failure that only surfaces at the least convenient moment.
 
 ---
 
@@ -774,7 +795,7 @@ What genuinely has to be redone on a new box:
 | Copilot auth | `copilot login`, **or headless** via `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN` |
 | `gh auth login` | for push and PR creation |
 | **global git identity** | the §14 landmine — set it globally on a fresh box |
-| devtunnel install + `devtunnel user login` | `libicu` needed on Ubuntu |
+| devtunnel install + `devtunnel user login` | `libicu-dev` needed on Ubuntu — **not** a pinned `libicu<NN>`, see landmine 18 |
 | `bridge.config.json` | gitignored, recreate from the example |
 | the two secrets | exported into the bridge shell |
 
