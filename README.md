@@ -92,8 +92,9 @@ devtunnel port create teams-bridge -p 3978
 The name makes the URL stable, so the webhook callback is set once. The tunnel belongs
 to your **account, not your machine** — see [Another machine](#another-machine).
 
-> Tunnels carry a **30-day expiration**. If one lapses you get a new URL and must update
-> the webhook by hand. Re-hosting periodically avoids it.
+> Tunnels are deleted after **30 days of inactivity** — a sliding window, so ordinary
+> use keeps yours alive indefinitely. If one does lapse you get a new URL and must
+> update the webhook by hand. See [Pausing and restarting](#pausing-and-restarting).
 
 ### 3. Power Automate flow (outbound)
 
@@ -136,8 +137,23 @@ nothing. **If the bridge log is empty, the problem is never in the bridge.**
 
 ### The two secrets
 
-`TEAMS_WEBHOOK_SECRET` and `TEAMS_FLOW_URL` are both bearer secrets — the flow URL's
-`sig=` parameter *is* its auth. Either put them in `.env` (gitignored):
+Neither is something you invent — **both are issued to you**, one by Teams and one by
+Power Automate, and you copy them out.
+
+| | `TEAMS_WEBHOOK_SECRET` | `TEAMS_FLOW_URL` |
+|---|---|---|
+| issued by | Teams, when you create the outgoing webhook (setup step 1) | Power Automate, when you save the flow (setup step 3) |
+| where | shown **once**, on creation | the trigger card's **HTTP POST URL**, readable any time |
+| what it is | a base64 key | a URL whose `sig=` query parameter *is* the auth |
+| used for | Teams signs each request `Authorization: HMAC <base64>`; the bridge recomputes HMAC-SHA256 over the raw body and compares in constant time | the bridge POSTs to it to get a message back into the thread |
+| if lost | regenerate it on the webhook in **Manage team → Apps** | re-open the flow trigger and copy it again |
+
+Both are **bearer secrets**: anyone holding the flow URL can post into your channel as
+the flow, and anyone holding the webhook secret can forge inbound requests. Treat the
+URL with the same care as the key — the fact that it looks like a link is exactly why
+people leak it.
+
+Either put them in `.env` (gitignored):
 
 ```sh
 cp .env.example .env && $EDITOR .env
@@ -152,18 +168,84 @@ read -rs TEAMS_FLOW_URL       && export TEAMS_FLOW_URL
 
 ### Watching and checking
 
-```sh
-tmux attach -t bridge       # Ctrl+B, release, then D to detach
+**Read the logs without attaching** — this is the safe default, because you can't
+fat-finger the running process:
 
+```sh
+tmux capture-pane -p -t bridge | tail -30
+```
+
+If you do attach, detaching is **Ctrl+B, release both keys, then `d`** — it is a
+sequence, not a chord, and holding them together is why it usually appears not to work.
+Stuck attached? From any other terminal:
+
+```sh
+tmux detach-client -s bridge
+```
+
+> Inside an attached session, **Ctrl+C stops the bridge** and Ctrl+D closes the shell
+> and destroys the session. Neither is recoverable by re-attaching.
+
+```sh
 curl -s -m 15 -o /dev/null -w '%{http_code} in %{time_total}s\n' \
   -X POST https://<your-tunnel>/api/messages -d '{}'
 ```
 
-A fast response means healthy — the probe is unsigned, so rejecting it is correct.
-~15s and an empty body means the tunnel is down.
+| response | meaning |
+|---|---|
+| fast `200` | healthy — the probe is unsigned, so rejecting it is correct |
+| fast `502` | tunnel up, **bridge down** |
+| ~15s, empty body | **tunnel down** |
 
 > WSL can shut down when the last terminal closes, killing tmux with it. Keep one
 > terminal open, or `sudo loginctl enable-linger $USER`.
+
+---
+
+## Pausing and restarting
+
+Nothing here is stateful in a way that needs care. Sessions live on disk and resume by
+an id derived from the Teams thread, so stopping and starting loses conversations only
+if you delete them.
+
+### Pause for a while
+
+**Stop the bridge and leave the tunnel hosted.**
+
+```sh
+tmux send-keys -t bridge C-c        # or: tmux kill-session -t bridge
+```
+
+Messages sent while paused get a fast `502`, so Teams shows an error immediately rather
+than sitting there looking like it might still be working. Un-pause:
+
+```sh
+tmux new -d -s bridge 'cd ~/workspace/code-from-teams && npm run bridge'
+```
+
+> **Leave the tunnel up.** Dev tunnels are deleted after **30 days of inactivity** — a
+> sliding window, not a countdown from creation — and losing the tunnel means a new URL
+> and re-pointing the Teams webhook by hand. Keeping it hosted is the whole reason that
+> never happens to you. Stopping the tunnel instead is also strictly worse day to day:
+> a dead tunnel hangs ~15s and returns an empty 200, which Teams blames on the webhook.
+
+### After a devbox restart
+
+Everything is gone — tmux, tunnel, bridge — and none of it is a service. The tunnel URL
+survives, though, because it belongs to your account, so **Teams and Power Automate need
+no changes**.
+
+```sh
+tmux new -d -s tunnel '~/bin/devtunnel host teams-bridge'
+tmux new -d -s bridge 'cd ~/workspace/code-from-teams && npm run bridge'
+```
+
+Then, only if your secrets are **not** in `.env`, re-export them in the bridge shell —
+that is the one thing a restart genuinely loses. Verify with the health probe above; a
+fast `200` means you are done.
+
+To avoid the manual step entirely, `sudo loginctl enable-linger $USER` keeps tmux alive
+across WSL shutdowns.
 
 ---
 

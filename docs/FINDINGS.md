@@ -717,9 +717,12 @@ to bring threads along, or skip it and let them start fresh (§15). `COPILOT_HOM
 relocates that directory, which is the hook for putting session state on a mounted
 volume when this eventually moves into a container (§16, stage 3).
 
-**The real expiry risk:** the tunnel has a 30-day expiration. If it lapses, the URL
-changes and the Teams webhook *does* have to be updated by hand. That, not the machine
-move, is the thing to watch.
+**The real expiry risk:** dev tunnels are deleted after **30 days of inactivity** — a
+sliding window rather than a countdown from creation, so ordinary use keeps a tunnel
+alive indefinitely. The exposure is a long pause, not a long life. If one does lapse,
+the URL changes and the Teams webhook has to be updated by hand. That, not the machine
+move, is the thing to watch — and it is why the recommended way to pause this system is
+to stop the *bridge* and leave the tunnel hosted.
 
 ### Two corrections to the above
 
@@ -744,3 +747,43 @@ to forget the tunnel is a real hazard, including a runbook that does not mention
 tmux new -s tunnel     # devtunnel host teams-bridge
 tmux new -s bridge     # node scripts/bridge.js
 ```
+
+## 18. Stopping and starting, measured
+
+"How do I pause this for a while?" has a right answer and a wrong one, and they are not
+obvious from the outside. Measured against the live system:
+
+| stopped | what a Teams message gets | tunnel |
+|---|---|---|
+| **bridge only** | `502` in **0.8s** | still hosted, `Host connections: 1` |
+| tunnel | ~15s hang, then an empty `200` | gone |
+
+**Stop the bridge, leave the tunnel hosted.** Two reasons, both concrete:
+
+1. **The error is honest and fast.** 502 in 0.8s lands well inside the 5-second webhook
+   window, so Teams says something went wrong immediately. The tunnel-down case blows
+   through the window with an empty 200, which Teams reports as a webhook failure — the
+   single most confusing failure mode in this system, and the one where the bridge log
+   is empty because nothing ever reached it.
+2. **It protects the URL.** Dev tunnels expire after 30 days of *inactivity* (a sliding
+   window). A hosted tunnel is the reason that clock never starts. Lose the tunnel and
+   you get a new URL, which means editing the Teams webhook by hand — the one piece of
+   this setup that cannot be scripted.
+
+Nothing else needs care: sessions are on disk and resume by derived id, so a pause of
+any length loses no conversation.
+
+### Detaching from tmux without killing anything
+
+Worth writing down because it cost real time. `Ctrl+B d` is bound correctly
+(`bind-key -T prefix d detach-client`); it reads as a chord but is a **sequence** —
+press `Ctrl+B`, release both, *then* `d`. Holding them together is why it looks broken.
+
+The better habit is not to attach at all:
+
+```sh
+tmux capture-pane -p -t bridge | tail -30
+```
+
+Attaching puts a live agent process one keystroke away from `Ctrl+C`. Reading the pane
+has no such failure mode, and it is what was used throughout this project.
