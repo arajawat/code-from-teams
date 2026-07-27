@@ -10,7 +10,8 @@
     "msg": "node --env-file-if-exists=.env scripts/fakemsg.js",
     "post": "node --env-file-if-exists=.env scripts/postflow.js",
     "soak": "node --env-file-if-exists=.env scripts/soakflow.js",
-    "reload": "bash scripts/reload.sh"
+    "reload": "bash scripts/reload.sh",
+    "url": "bash scripts/callback-url.sh"
   },
   "dependencies": {
     "@github/copilot-sdk": "^1.0.8"

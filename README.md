@@ -154,15 +154,17 @@ to your **account, not your machine** — see [Another machine](#another-machine
 
 Team owner → **Manage team** → **Apps** → *Create an outgoing webhook* (bottom of page).
 
-The **callback URL** is your tunnel plus `/api/messages`:
+For the **callback URL**, do not assemble it by hand — print the exact string and
+paste it:
 
 ```sh
-~/bin/devtunnel show teams-bridge        # the "Connect via browser" URL is the one
+npm run url
+# https://a1b2c3d4-3978.euw.devtunnels.ms/api/messages
 ```
 
-```
-https://<tunnel-id>-3978.<region>.devtunnels.ms/api/messages
-```
+It reads the URL from the tunnel itself, appends the path, and **refuses rather than
+guesses** if it cannot find a URL for that port — a wrong callback URL is silent, so
+a script that returns something plausible would be worse than one that returns nothing.
 
 Save the **security token** it shows you — that is `TEAMS_WEBHOOK_SECRET`, and it is
 displayed **once**.
@@ -549,6 +551,7 @@ conversations along; skip it and threads degrade gracefully to fresh ones.
 | Script | Purpose |
 |---|---|
 | `npm run bridge` | The bridge itself. |
+| `npm run url` | Print the exact webhook callback URL to paste into Teams. |
 | `npm run reload` | Apply `bridge.config.json` to the running bridge. |
 | `npm run msg -- "text"` | Send a signed fake Teams message locally. `--thread <id>` to pick a thread. |
 | `npm run mockflow` | Stand in for the Power Automate flow, so the whole loop runs offline. |
