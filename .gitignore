@@ -4,3 +4,4 @@ node_modules/
 *.log
 audit-*.jsonl
 audit.jsonl
+bridge.config.json

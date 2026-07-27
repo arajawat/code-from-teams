@@ -8,11 +8,11 @@
 // Outbound : Power Automate flow (anything after those 5 seconds)
 // See docs/DESIGN.md for why those are two different mechanisms.
 //
-// env:
+// Settings: bridge.config.json (repo path, model, effort, yolo, allowlist).
+// Secrets stay in the environment and never touch that file:
 //   TEAMS_WEBHOOK_SECRET   inbound HMAC token from the outgoing webhook
 //   TEAMS_FLOW_URL         outbound POST url from the Power Automate flow
-//   REPO_DIR               working directory the agent operates in
-//   TEAMS_ALLOWED_AAD_IDS  comma-separated aadObjectIds allowed to drive it
+// Edit the config, then `npm run reload`.
 
 const http = require("http");
 const fs = require("fs");
@@ -25,30 +25,31 @@ const {
   sessionIdFor,
   postToThread,
 } = require("../lib/teams");
+const { load: loadConfig, checkRepo, CONFIG_PATH } = require("../lib/config");
 
 const num = (name, dflt) => Number(process.env[name] ?? dflt);
 
 const PORT = num("PORT", 3978);
 const SECRET = process.env.TEAMS_WEBHOOK_SECRET;
 const FLOW_URL = process.env.TEAMS_FLOW_URL;
-const REPO_DIR = process.env.REPO_DIR ?? process.cwd();
-// Pinned, not left to the runtime default. The default drifts as new models ship,
-// and it resolved to effort "medium" - so the agent was quietly thinking less hard
-// than it could. Runtime reports claude-opus-5 supports low|medium|high|xhigh|max;
-// the SDK's own ReasoningEffort type stops at xhigh.
-const MODEL = process.env.COPILOT_MODEL ?? "claude-opus-5";
-const EFFORT = process.env.COPILOT_EFFORT ?? "xhigh";
 const AUDIT_PATH = process.env.AUDIT_LOG ?? path.join(__dirname, "..", "audit.jsonl");
+
+// Non-secret settings come from bridge.config.json (see lib/config.js), so
+// pointing this at a different repo is a file edit and a reload, not a code change.
+// Model and effort are PINNED rather than left to the runtime default: that default
+// drifts as new models ship, and it resolved to effort "medium" - the agent was
+// quietly thinking less hard than it could.
+const cfg = loadConfig();
+const REPO_DIR = cfg.repoDir;
+const MODEL = cfg.model;
+const EFFORT = cfg.effort;
 
 // Who is allowed to drive the agent. HMAC proves a message came from Teams; it
 // says nothing about who typed it. This is the only real access control.
 // Lowercased on both sides: aadObjectIds are GUIDs and casing is not guaranteed
 // to be stable. A casing mismatch would lock you out of your own bridge with a
 // message that says nothing about why.
-const ALLOWED = (process.env.TEAMS_ALLOWED_AAD_IDS ?? "")
-  .split(",")
-  .map((s) => s.trim().toLowerCase())
-  .filter(Boolean);
+const ALLOWED = cfg.allowedAadIds;
 
 // Budget for the agent's own work. Time spent waiting for a human to answer a
 // question is credited back, so a slow reply never kills a healthy turn.
@@ -77,7 +78,7 @@ const QUIET_TOOLS = new Set(["ask_user", "store_memory", "vote_memory", "manage_
 // prompts ("may I edit this file?") are noise on a phone; design questions
 // ("which approach do you want?") are the entire point of the product, and
 // they keep working via onUserInputRequest.
-const YOLO = (process.env.YOLO ?? "1") !== "0";
+const YOLO = cfg.yolo;
 
 const t0 = Date.now();
 const stamp = () => `+${((Date.now() - t0) / 1000).toFixed(1)}s`;
@@ -504,14 +505,22 @@ const server = http.createServer((req, res) => {
 async function main() {
   await client.start();
   server.listen(PORT, () => {
+    const repo = checkRepo(REPO_DIR);
     console.log(`bridge listening on http://localhost:${PORT}/api/messages`);
+    console.log(`config           ${cfg.configPath ?? `${CONFIG_PATH} (none - using defaults)`}`);
     console.log(`repo dir         ${REPO_DIR}`);
+    for (const n of repo.notes) console.log(`                 ${n}`);
     console.log(`model            ${MODEL ?? "(runtime default)"}  effort ${EFFORT ?? "(default)"}`);
     console.log(`HMAC             ${SECRET ? "ON" : "OFF (no TEAMS_WEBHOOK_SECRET)"}`);
     console.log(`yolo             ${YOLO ? "ON (all tools auto-approved)" : "OFF (tools denied)"}`);
     console.log(`outbound flow    ${FLOW_URL ? "SET" : "NOT SET (replies will no-op)"}`);
     console.log(`allowlist        ${ALLOWED.length ? ALLOWED.join(", ") : "OFF (anyone in the channel)"}`);
     console.log(`audit log        ${AUDIT_PATH}`);
+    // Printed last so it is the thing left on screen. These are all fatal to
+    // doing real work, and every one of them would otherwise surface as a
+    // confusing failure several minutes into a turn.
+    for (const p of repo.problems) console.log(`\n  ✗ ${p}`);
+    if (repo.problems.length) console.log("");
   });
 }
 

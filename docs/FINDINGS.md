@@ -531,3 +531,51 @@ signature failure mode. Verified across four cases:
 | **no `aadObjectId` at all** | rejected — fail-closed, not fail-open |
 
 The last row matters most: an absent id must never be treated as permission.
+
+## 14. Pointing the bridge at any repo
+
+Settings that are not secrets now live in `bridge.config.json`; `npm run reload` makes
+them active. Two constraints shaped this more than convenience did.
+
+**Secrets stay out of the file.** `TEAMS_WEBHOOK_SECRET` and `TEAMS_FLOW_URL` remain in
+the bridge shell's environment. A config file gets copied, backed up, and screen-shared
+during a demo; a shell's environment does not. So `reload.sh` restarts the bridge
+*inside its existing tmux window* rather than starting a new shell — the secrets never
+have to be handled again. Nothing is lost by restarting, because Copilot sessions live
+on disk and resume by an id derived from the Teams thread.
+
+**Validate before killing anything.** `reload.sh` checks the config and the target repo
+first and refuses to reload if either is broken, so a typo cannot leave you with no
+bridge at all.
+
+### The git identity landmine
+
+The agent had been committing happily in the scratch repo, which hid this: the **global**
+git identity on this machine is empty. The scratch repo had a *local* identity
+(`t <t@t>`), set long ago and forgotten. Point the bridge at a freshly cloned repo and
+the agent's first `git commit` fails with "Please tell me who you are" — several minutes
+into a turn, from a car, with the failure buried in tool output.
+
+`checkRepo()` now resolves `git config user.name/user.email` (which falls through local
+→ global → system) at startup and prints the fix. Same for: not a directory, not a git
+repo, no `origin` remote, and sitting on `main` or `master` with yolo enabled.
+
+This is the same lesson as everything else in this document — **the failure would not
+have been loud.** It would have looked like the agent quietly deciding not to commit.
+
+### Verified
+
+Six config paths: real repo; missing `repoDir`; a directory that is not a git repo; a
+git repo with no identity; malformed JSON (throws, rather than silently falling back to
+defaults and pointing the agent at the wrong repo); and env-overrides-file.
+
+Then a full turn against a **brand new empty repo** driven entirely by the config file —
+agent created `hello.js`, committed it, and the committed code runs. Reload was also
+exercised against the live bridge: the allowlist came from the config file rather than
+the launch line, while HMAC and the flow URL survived in the tmux shell.
+
+### Still one repo at a time
+
+Turns are globally serialised because there is one working directory — a second thread
+gets "I'm busy". Repo-per-thread (`WORK_ROOT/<threadRoot>`) would remove the lock and
+let threads run in parallel. That is the natural v2, and deliberately not built yet.

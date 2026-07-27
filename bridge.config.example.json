@@ -1,0 +1,12 @@
+{
+  "_comment": "Copy to bridge.config.json. Non-secret settings only - secrets stay in the environment (see .env.example). Every field is optional; env vars override anything set here.",
+
+  "repoDir": "~/workspace/bridge-scratch",
+
+  "model": "claude-opus-5",
+  "effort": "xhigh",
+
+  "yolo": true,
+
+  "allowedAadIds": []
+}

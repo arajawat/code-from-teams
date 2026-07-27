@@ -114,6 +114,60 @@ a looser policy — DLP is evaluated **per environment**.
 
 ---
 
+## Pointing it at a repo
+
+Non-secret settings live in `bridge.config.json`. Copy the example and edit it:
+
+```sh
+cp bridge.config.example.json bridge.config.json
+$EDITOR bridge.config.json
+npm run reload
+```
+
+```json
+{
+  "repoDir": "~/work/my-service",
+  "model": "claude-opus-5",
+  "effort": "xhigh",
+  "yolo": true,
+  "allowedAadIds": ["1a2b3c4d-…"]
+}
+```
+
+`npm run reload` validates the config **before** touching the running bridge, then
+restarts it inside its existing tmux window — so `TEAMS_WEBHOOK_SECRET` and
+`TEAMS_FLOW_URL` never have to leave that shell's environment. Nothing is lost:
+Copilot sessions live on disk and resume by an id derived from the Teams thread, so
+conversations survive a reload.
+
+Secrets are deliberately **not** allowed in this file. Environment variables override
+anything set here, for one-off runs.
+
+### What a repo needs
+
+The startup banner checks these and complains loudly if any is missing:
+
+| requirement | why |
+|---|---|
+| exists, and is a git repo | obvious, but worth catching before a turn starts |
+| **a git identity** | `git commit` fails without one, and the *global* identity is often unset — set `git -C <repo> config user.name/user.email` |
+| an `origin` remote | needed to push or open PRs |
+| not sitting on `main` | a yolo agent with commit rights on `main` is a bad afternoon |
+
+Pushing and opening PRs works if `gh auth status` is logged in — `gh` doubles as git's
+credential helper. `repo` scope is enough.
+
+An `AGENTS.md` in the target repo is the cheapest way to fix the tone, because the
+agent is being read aloud on a phone:
+
+```md
+Replies are read on a phone, often in a car. Keep them under three sentences.
+Never paste diffs or file contents — push a branch and link the PR instead.
+When you need a decision, ask one question with numbered options.
+```
+
+---
+
 ## Scripts
 
 Copy `.env.example` to `.env` and fill in both secrets, then every script picks them
