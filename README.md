@@ -66,19 +66,7 @@ That is the whole persistence design: no database, no mapping table, nothing to 
 
 Three cloud-side pieces. You do these once; they survive machine moves.
 
-### 1. Teams outgoing webhook (inbound)
-
-Team owner → **Manage team** → **Apps** → *Create an outgoing webhook* (bottom of page).
-Point the callback URL at your tunnel (step 2). Save the security token — that is
-`TEAMS_WEBHOOK_SECRET`.
-
-> Mentions must be picked from the **autocomplete dropdown**. Typing `@name` as plain
-> text does not fire the webhook.
->
-> **Every message needs the @mention, including replies.** A bare "yes" never reaches
-> the bridge, so any question the agent asks has to remind you.
-
-### 2. Tunnel
+### 1. Tunnel
 
 The bridge listens on `:3978` and needs a public HTTPS URL.
 
@@ -162,6 +150,34 @@ to your **account, not your machine** — see [Another machine](#another-machine
 > use keeps yours alive indefinitely. If one does lapse you get a new URL and must
 > update the webhook by hand. See [Pausing and restarting](#pausing-and-restarting).
 
+### 2. Teams outgoing webhook (inbound)
+
+Team owner → **Manage team** → **Apps** → *Create an outgoing webhook* (bottom of page).
+
+The **callback URL** is your tunnel plus `/api/messages`:
+
+```sh
+~/bin/devtunnel show teams-bridge        # the "Connect via browser" URL is the one
+```
+
+```
+https://<tunnel-id>-3978.<region>.devtunnels.ms/api/messages
+```
+
+Save the **security token** it shows you — that is `TEAMS_WEBHOOK_SECRET`, and it is
+displayed **once**.
+
+> **The callback URL is editable at any time**, so you can create the webhook with a
+> placeholder now and paste the real URL in once the tunnel exists. During development
+> this URL was repointed many times. Because the tunnel is named, its URL is stable, so
+> in normal use you set this once and never touch it again.
+
+> Mentions must be picked from the **autocomplete dropdown**. Typing `@name` as plain
+> text does not fire the webhook.
+>
+> **Every message needs the @mention, including replies.** A bare "yes" never reaches
+> the bridge, so any question the agent asks has to remind you.
+
 ### 3. Power Automate flow (outbound)
 
 Teams → **Workflows** → template **"Send webhook alerts to channel"**.
@@ -212,7 +228,7 @@ Power Automate, and you copy them out.
 
 | | `TEAMS_WEBHOOK_SECRET` | `TEAMS_FLOW_URL` |
 |---|---|---|
-| issued by | Teams, when you create the outgoing webhook (setup step 1) | Power Automate, when you save the flow (setup step 3) |
+| issued by | Teams, when you create the outgoing webhook (setup step 2) | Power Automate, when you save the flow (setup step 3) |
 | where | shown **once**, on creation | the trigger card's **HTTP POST URL**, readable any time |
 | what it is | a base64 key | a URL whose `sig=` query parameter *is* the auth |
 | used for | Teams signs each request `Authorization: HMAC <base64>`; the bridge recomputes HMAC-SHA256 over the raw body and compares in constant time | the bridge POSTs to it to get a message back into the thread |

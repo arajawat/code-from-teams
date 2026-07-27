@@ -341,6 +341,18 @@ rights.
    not evidence about what the bridge will get. Check with `bash -lic 'node -v'` and fix
    with `nvm alias default 22`.
 
+28. **The two halves are joined by one field nobody documents: the webhook's callback
+   URL.** It is the tunnel URL plus `/api/messages`, and it is the only thing connecting
+   Teams to the bridge. Two things are worth knowing about it. It is **editable at any
+   time** - so a webhook can be created with a placeholder before the tunnel exists, and
+   repointed later, which is what happened repeatedly during development while VS Code
+   port forwarding churned the URL on every restart. And a *named* tunnel keeps a stable
+   URL, which is the entire reason this field is set once rather than every session.
+   Get the current value with `devtunnel show teams-bridge` (add `-j` for JSON).
+
+   The bridge itself never inspects `req.url`, so the `/api/messages` path is convention
+   rather than a requirement - useful to know when a probe on `/` behaves the same way.
+
 27. **`devtunnel host` with no tunnel id creates a brand new tunnel every time.** The
    CLI says so in one line of its own help - *"Host a tunnel, if tunnel ID is not
    specified a new tunnel will be created"* - and the consequence is severe: `devtunnel
