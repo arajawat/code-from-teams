@@ -579,3 +579,32 @@ the launch line, while HMAC and the flow URL survived in the tmux shell.
 Turns are globally serialised because there is one working directory — a second thread
 gets "I'm busy". Repo-per-thread (`WORK_ROOT/<threadRoot>`) would remove the lock and
 let threads run in parallel. That is the natural v2, and deliberately not built yet.
+
+## 15. Old threads: proven, and still nothing stored
+
+The design bet was that a Teams thread from days ago should resume mid-conversation
+without the bridge keeping any records. The session id is a pure function of the thread
+root, so there is nothing to look up and nothing to go stale:
+
+```js
+const sessionId = "teams-" + conversation.id.split(";messageid=")[1];
+```
+
+Tested rather than assumed. A session was given two facts to hold, its files were
+backdated three days, and it was resumed **in a fresh process**:
+
+```
+RESUMED OK (3-day-old session, fresh process)
+RECALL: Codeword: **TANGERINE-47**. Casing: **snake_case**.
+```
+
+Both facts came back exactly. Supporting evidence for longer gaps: 190 session
+directories on this machine, the oldest six weeks old and still intact, with no
+retention, TTL, or cleanup setting anywhere in `~/.copilot`. Session state is not
+reaped behind your back.
+
+Worth being clear about what this does *not* prove. If session state is ever deleted,
+`resumeSession` throws `Session not found`, and the bridge falls back to creating a
+session with the same derived id. The thread keeps working; it just starts fresh. That
+is the right failure — a lost conversation, never an error message the user in a car
+has to interpret.
