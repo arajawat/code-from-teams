@@ -324,3 +324,34 @@ on import, and the trigger URL is REGENERATED (new url after import).
   ask_user  onUserInputRequest returns a Promise              VERIFIED in SDK typings
 Nothing about the transport is unknown any more. Remaining work is the Copilot SDK
 wiring itself, which has no external dependencies.
+
+## R5 CLOSED - STABLE TUNNEL (2026-07-27)
+Replaced VS Code port forwarding with the standalone devtunnel CLI, so the tunnel no
+longer depends on VS Code being open and the URL no longer churns on restart.
+
+Install notes (WSL Ubuntu 26.04):
+  curl -sL https://aka.ms/DevTunnelCliInstall | bash     # lands in ~/bin/devtunnel
+  chmod +x ~/bin/devtunnel
+  sudo apt install -y libicu78     # REQUIRED: devtunnel is a .NET app and fails with
+                                   # "Couldn't find a valid ICU package" without it.
+                                   # DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 does NOT
+                                   # work around it for this single-file build.
+Named persistent tunnel (same URL every restart):
+  devtunnel user login
+  devtunnel create teams-bridge -a          # -a = allow anonymous; Teams needs it
+  devtunnel port create teams-bridge -p 3978
+  devtunnel host teams-bridge
+Current URL: https://a1b2c3d4-3978.euw.devtunnels.ms
+
+VERIFIED 2026-07-27: POST to <tunnel>/api/messages reached the bridge and returned the
+5s ack. HTTP 200 in 1.2s. No anti-phishing interstitial on JSON POSTs (that only
+affects browser GETs), so no X-Tunnel-Skip-AntiPhishing-Page header is needed.
+
+Chosen over cloudflared/ngrok deliberately: those work without sudo but route corp
+Teams traffic through a third party, which conflicts with the data-policy constraint
+that already ruled out an M365 dev tenant. devtunnel keeps traffic Microsoft-side.
+
+SURVIVING VS CODE CLOSING: run the bridge and the tunnel under tmux (or systemd user
+units). CAVEAT: WSL itself can shut down when the last terminal closes, which kills
+both regardless of tmux -- keep one Windows Terminal open on WSL, or
+`sudo loginctl enable-linger $USER`.
