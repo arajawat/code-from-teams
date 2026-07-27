@@ -465,3 +465,15 @@ Re-confirmed:
   onUserInputRequest - "When provided, ENABLES the ask_user tool". Off by default.
   UserInputHandler = (request, invocation: { sessionId }) => Promise<...> | ...
     The Promise return is what lets us park the question in a Teams thread.
+
+## THE FINAL TEXT IS result.data.content, NOT result.text
+sendAndWait resolves with an AssistantMessageEvent whose shape is:
+  { type: "assistant.message", id, parentId, timestamp,
+    data: { content: string,   <- THE ACTUAL REPLY TEXT
+            messageId, model?, outputTokens?, citations?, ... } }
+Guessing `result.text` yields undefined, and the bridge would cheerfully post the string
+"undefined" into the Teams thread. No exception, no log, just a nonsense message - the
+same silent-failure pattern as every other trap on this project. Verified in
+dist/generated/session-events.d.ts:3232.
+Also: sendAndWait can resolve UNDEFINED (on timeout / no final message), so the
+undefined case needs its own branch, not `?? ""`.
