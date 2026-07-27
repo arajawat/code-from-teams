@@ -341,7 +341,7 @@ Named persistent tunnel (same URL every restart):
   devtunnel create teams-bridge -a          # -a = allow anonymous; Teams needs it
   devtunnel port create teams-bridge -p 3978
   devtunnel host teams-bridge
-Current URL: https://a1b2c3d4-3978.euw.devtunnels.ms
+Current URL: https://<your-tunnel>.devtunnels.ms
 
 VERIFIED 2026-07-27: POST to <tunnel>/api/messages reached the bridge and returned the
 5s ack. HTTP 200 in 1.2s. No anti-phishing interstitial on JSON POSTs (that only

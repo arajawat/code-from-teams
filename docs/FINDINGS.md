@@ -688,7 +688,7 @@ object, not a machine-level one:**
 
 ```
 Tunnel ID : teams-bridge.asse
-Ports     : 3978  https://a1b2c3d4-3978.euw.devtunnels.ms/
+Ports     : 3978  https://<your-tunnel>.devtunnels.ms/
 Expiration: 30 days
 ```
 

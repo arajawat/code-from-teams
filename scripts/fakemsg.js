@@ -35,6 +35,8 @@ const activity = {
   from: {
     id: "29:fake",
     name: process.env.FAKE_NAME ?? "Local Tester",
+    // Deliberately not a real id. If the bridge has an allowlist, this is
+    // rejected until you set FAKE_AAD_ID - which is the correct default.
     aadObjectId: process.env.FAKE_AAD_ID ?? "00000000-0000-0000-0000-000000000000",
   },
   conversation: { id: `19:fakechannel@thread.tacv2;messageid=${thread}` },
