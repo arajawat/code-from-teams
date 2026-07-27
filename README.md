@@ -264,6 +264,7 @@ npm run reload
   "model": "claude-opus-5",
   "effort": "xhigh",
   "yolo": true,
+  "voiceFile": "prompts/teams-voice.md",
   "allowedAadIds": ["1a2b3c4d-…"]
 }
 ```
@@ -278,6 +279,23 @@ anything set here, for one-off runs.
 
 `allowedAadIds` is the only real authorisation control. Send one message and the bridge
 logs the sender's `aadObjectId`; put that in the list.
+
+### How the replies sound
+
+`prompts/teams-voice.md` is appended to the system prompt on every turn. It is what
+stops the agent answering a phone with a screenful of diff — it tells the agent it is
+being read aloud, to lead with the outcome, never to paste code, and to ask questions
+one at a time with **numbered options** so you can reply "do #2" from a car.
+
+It is worth more than it sounds. The same question, with and without it:
+
+| | characters | code block |
+|---|---|---|
+| without | 1460 | yes — pasted the whole implementation |
+| with | 694 | no — wrote it to the repo, ran the tests, described it in five sentences |
+
+Edit the markdown and `npm run reload`; no code change. Point `voiceFile` somewhere else
+to use your own. If the file is missing the bridge still runs and the banner says so.
 
 ### What the target repo needs
 

@@ -8,5 +8,7 @@
 
   "yolo": true,
 
+  "voiceFile": "prompts/teams-voice.md",
+
   "allowedAadIds": []
 }

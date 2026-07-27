@@ -328,39 +328,79 @@ verdict, sender, text and thread root.
 
 ---
 
-## 10. What's left
+## 10. The build list, and how it turned out
 
-The transport is finished. Everything below is local work with no external dependency —
-no tenant policy, no admin, no third party.
+This section was written before the SDK was wired in, as a list of what remained. All of
+it is now built. Kept as a record, with the outcome against each item, because several
+predictions were wrong in instructive ways.
 
-`scripts/teams-roundtrip-test.js` is already the bridge in all but one function. HMAC
-verification, `toPlainText()`, `threadRootOf()`, the parked-question map, the serialize
-lock and the flow POST are all proven. Only `runScenario()` is fake.
+| # | planned | outcome |
+|---|---|---|
+| 1 | Swap the fake scenario for a Copilot session | done — `openSession()` |
+| 2 | Pass `approveAll` explicitly as `onPermissionRequest` | done — and the warning was right, see §11 |
+| 3 | Wire `onUserInputRequest` to the parked-question map | done — proven live, §13 |
+| 4 | Throttle milestone posts | done |
+| 5 | A question timeout and a turn timeout | done — `ANSWER_TIMEOUT_MS`, `TURN_TIMEOUT_MS` |
+| 6 | Allowlist, audit log, keep secrets from the agent | done, all three |
+| 7 | Tell the agent it is being read on a phone | done — but **not** the way planned |
 
-1. **Swap the scenario for a Copilot session.** `npm i @github/copilot-sdk`, then
-   `resumeSession("teams-" + threadRoot)` (falling back to create), with
-   `infiniteSessions: { enabled: true }` on from day one — it is a config **object**,
-   not a boolean (`enabled` defaults true; the compaction thresholds default to 0.80
-   background / 0.95 blocking).
-2. **Pass `approveAll` as `onPermissionRequest` explicitly.** Omitting it does not mean
-   "auto-approve" — it leaves requests pending and the agent hangs on its first tool
-   call.
-3. **Wire `onUserInputRequest` to the existing parked-question machinery.** Post the
-   question via the flow and return the Promise. This is already built and proven.
-4. **Throttle milestone posts to about one per 15 seconds**, then post the final result.
-   Two minutes of silence looks broken, particularly on stage.
-5. **Two timeouts.** A question timeout (a parked question plus the global serialize lock
-   will otherwise freeze the bridge forever) and a turn timeout (R4).
-6. **Security hardening (R2).** `aadObjectId` allowlist, an append-only JSONL audit log
-   of *every* inbound message, and `secret-env-vars` so a tool call can't `env` the
-   webhook secret into the channel.
-7. **One line in `AGENTS.md`** — the output adapter is a prompt, not code:
-   *"You are being read aloud on a phone. Keep replies under 3 sentences. Never paste
-   diffs or code — link to the PR instead."*
+Two are worth expanding.
 
-Two things that would be tempting to skip and shouldn't be: the milestone posts (item 4)
-and the question timeout (item 5). The first is what makes the system feel alive; the
-second is what stops one unanswered question from bricking it.
+**Item 6 was solved better than specified.** The plan said use the CLI's `secret-env-vars`
+setting. That setting does not exist in the SDK — grepping for it finds nothing, and it
+would be easy to conclude the protection is missing. It is stronger than planned:
+
+```js
+const agentEnv = { ...process.env };
+delete agentEnv.TEAMS_WEBHOOK_SECRET;
+delete agentEnv.TEAMS_FLOW_URL;
+const client = new CopilotClient({ env: agentEnv, workingDirectory: REPO_DIR });
+```
+
+The secrets are removed from the environment the agent is spawned into. Not filtered out
+of its output — absent. A yolo agent with a shell cannot print what it was never given.
+Filtering output would have been a filter; this is a wall.
+
+**Item 7 was planned as one line in `AGENTS.md`. That was the wrong home for it.** An
+`AGENTS.md` lives in the *target* repo, and the bridge is meant to point at any repo
+(§14) — so the instruction would have to be copied into every repo, and forgotten in
+most. It also would not apply if the repo already had its own `AGENTS.md` conventions.
+
+The right hook is `systemMessage`, which lives on `SessionConfigBase` — the same place as
+`model` and `reasoningEffort`, and therefore carried by **both** create and resume:
+
+```js
+if (VOICE) config.systemMessage = { mode: "append", content: VOICE };
+```
+
+`"append"` keeps every SDK guardrail and adds a section. `"replace"` exists and is
+tempting, but its own docs say it "removes all SDK guardrails including security
+restrictions" — not a trade worth making for tone of voice. The text lives in
+`prompts/teams-voice.md`, so changing how the agent sounds is editing a markdown file
+and running `npm run reload`, with no code change and no target repo touched.
+
+### What the voice prompt is worth, measured
+
+Same question to the same model, once without the prompt and once with:
+*"Write a JS function that debounces a callback, and show me the code."*
+
+| | characters | lines | code block |
+|---|---|---|---|
+| without | 1460 | 64 | **yes** |
+| with | 694 | 5 | **no** |
+
+The difference is not just length. Without the prompt the agent printed an
+implementation into the chat. With it, the agent **wrote the code into the repo, ran the
+tests, and described the result in five sentences** — naming the file in words, saying
+the suite passed 18 of 18, and offering to commit. That is the actual product: not a
+shorter answer, a different shape of answer. One is unusable while driving; the other is
+exactly what you want read aloud.
+
+The instructions that earned their place: lead with the outcome not the process; never
+paste code or diffs; ask one question at a time with **numbered options**. The last one
+matters because the answer path is already proven — in the live run (§13) the reply
+`"lets do #1"` mapped straight onto a parked question. Numbered options make the cheapest
+possible reply from a car also the correct one.
 
 ---
 

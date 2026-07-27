@@ -43,6 +43,9 @@ const cfg = loadConfig();
 const REPO_DIR = cfg.repoDir;
 const MODEL = cfg.model;
 const EFFORT = cfg.effort;
+// Appended to the system prompt so replies suit someone reading on a phone
+// rather than a terminal. Null if the file is missing - the banner says so.
+const VOICE = cfg.voice;
 
 // Who is allowed to drive the agent. HMAC proves a message came from Teams; it
 // says nothing about who typed it. This is the only real access control.
@@ -303,6 +306,10 @@ async function openSession(threadRoot) {
   // silently fall back to the default effort.
   if (MODEL) config.model = MODEL;
   if (EFFORT) config.reasoningEffort = EFFORT;
+  // "append" keeps every SDK guardrail and adds our section. "replace" would
+  // drop the built-in safety rules, which is not a trade worth making for tone.
+  // Same resume/create reasoning as above: systemMessage is on SessionConfigBase.
+  if (VOICE) config.systemMessage = { mode: "append", content: VOICE };
 
   try {
     const session = await client.resumeSession(id, config);
@@ -511,6 +518,13 @@ async function main() {
     console.log(`repo dir         ${REPO_DIR}`);
     for (const n of repo.notes) console.log(`                 ${n}`);
     console.log(`model            ${MODEL ?? "(runtime default)"}  effort ${EFFORT ?? "(default)"}`);
+    console.log(
+      `voice prompt     ${
+        VOICE
+          ? `${cfg.voiceFile} (${VOICE.length} chars)`
+          : `MISSING at ${cfg.voiceFile} - replies will not be phone-shaped`
+      }`,
+    );
     console.log(`HMAC             ${SECRET ? "ON" : "OFF (no TEAMS_WEBHOOK_SECRET)"}`);
     console.log(`yolo             ${YOLO ? "ON (all tools auto-approved)" : "OFF (tools denied)"}`);
     console.log(`outbound flow    ${FLOW_URL ? "SET" : "NOT SET (replies will no-op)"}`);
