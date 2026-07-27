@@ -32,7 +32,12 @@ const PORT = num("PORT", 3978);
 const SECRET = process.env.TEAMS_WEBHOOK_SECRET;
 const FLOW_URL = process.env.TEAMS_FLOW_URL;
 const REPO_DIR = process.env.REPO_DIR ?? process.cwd();
-const MODEL = process.env.COPILOT_MODEL;
+// Pinned, not left to the runtime default. The default drifts as new models ship,
+// and it resolved to effort "medium" - so the agent was quietly thinking less hard
+// than it could. Runtime reports claude-opus-5 supports low|medium|high|xhigh|max;
+// the SDK's own ReasoningEffort type stops at xhigh.
+const MODEL = process.env.COPILOT_MODEL ?? "claude-opus-5";
+const EFFORT = process.env.COPILOT_EFFORT ?? "xhigh";
 const AUDIT_PATH = process.env.AUDIT_LOG ?? path.join(__dirname, "..", "audit.jsonl");
 
 // Who is allowed to drive the agent. HMAC proves a message came from Teams; it
@@ -289,7 +294,11 @@ async function openSession(threadRoot) {
     // agent never issues them, so they can never block the bridge. Adding a
     // handler here would enable a dialog we cannot render in a Teams thread.
   };
+  // Set on the shared config so BOTH resume and create carry it. If it were set
+  // only on create, every follow-up turn in a thread (which resumes) would
+  // silently fall back to the default effort.
   if (MODEL) config.model = MODEL;
+  if (EFFORT) config.reasoningEffort = EFFORT;
 
   try {
     const session = await client.resumeSession(id, config);
@@ -494,7 +503,7 @@ async function main() {
   server.listen(PORT, () => {
     console.log(`bridge listening on http://localhost:${PORT}/api/messages`);
     console.log(`repo dir         ${REPO_DIR}`);
-    console.log(`model            ${MODEL ?? "(runtime default)"}`);
+    console.log(`model            ${MODEL ?? "(runtime default)"}  effort ${EFFORT ?? "(default)"}`);
     console.log(`HMAC             ${SECRET ? "ON" : "OFF (no TEAMS_WEBHOOK_SECRET)"}`);
     console.log(`yolo             ${YOLO ? "ON (all tools auto-approved)" : "OFF (tools denied)"}`);
     console.log(`outbound flow    ${FLOW_URL ? "SET" : "NOT SET (replies will no-op)"}`);

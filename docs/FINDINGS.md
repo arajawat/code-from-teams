@@ -422,3 +422,53 @@ the exact command — much more reviewable than a tool name:
 ```
 
 With auto-approval on, this log is the only record of what the agent did on your behalf.
+
+## 12. Model and reasoning effort: pin them
+
+The bridge originally set no model, so it took the runtime default. Two things were
+true and neither was visible:
+
+1. The default resolved to **`claude-opus-5`** — the same model as the Copilot CLI
+   session that built this project. Pleasant accident: the north-star ("talk to it
+   from Teams the way I talk to it at my desk") was literally the same model.
+2. That default ran at **`reasoningEffort: "medium"`**, because `defaultReasoningEffort`
+   for the model is `medium`. Every run described in this document — including the
+   106-second parked question and the agent catching its own `999.6ms` bug — happened
+   at *medium* effort. Nobody chose that; it was just the floor.
+
+Both are now pinned: `COPILOT_MODEL` defaults to `claude-opus-5`, `COPILOT_EFFORT`
+defaults to `xhigh`. A runtime default that drifts under a demo is not a risk worth
+carrying for free.
+
+**The SDK's type is stale.** `ReasoningEffort` in the typings is
+`"low" | "medium" | "high" | "xhigh"`, but the runtime reports:
+
+```
+supportedReasoningEfforts: ["low","medium","high","xhigh","max"]
+defaultReasoningEffort   : "medium"
+```
+
+So `max` exists and the type does not list it. The docs say to trust the runtime
+("Use `client.listModels()` to check supported values"), and the bridge is plain JS,
+so `COPILOT_EFFORT=max` is reachable. Only `xhigh` has been verified end to end here.
+This is the seventh time on this project that documentation or typings disagreed with
+what the system actually does.
+
+**The asymmetry that would have bitten us.** Both `SessionConfig` and
+`ResumeSessionConfig` extend `SessionConfigBase`, which is where `model` and
+`reasoningEffort` live. Since a Teams thread *resumes* on every turn after the first,
+setting these only on create would have given every conversation one good turn and
+then a silent drop back to the default. `openSession()` builds one config object and
+uses it on both paths, so this is structurally safe — but it is safe by accident, and
+worth not "tidying up".
+
+**Verified, not assumed:** there is no public `getReasoningEffort()` on `Session`, so
+confirmation came from running a real turn and reading the session journal:
+
+```
+$ grep -oE '"(model|reasoningEffort)":"[^"]*"' ~/.copilot/session-state/<id>/events.jsonl
+"model":"claude-opus-5"
+"reasoningEffort":"xhigh"
+```
+
+Effort is recorded, not silently discarded.
