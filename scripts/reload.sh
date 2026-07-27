@@ -2,8 +2,12 @@
 # Make the current bridge.config.json active.
 #
 # Restarts the bridge process INSIDE its existing tmux window, which matters:
-# TEAMS_WEBHOOK_SECRET and TEAMS_FLOW_URL live only in that shell's environment
-# and never touch disk. Starting a fresh shell would lose them.
+# TEAMS_WEBHOOK_SECRET and TEAMS_FLOW_URL may live only in that shell's
+# environment. Starting a fresh shell would lose them.
+#
+# Restarts via `npm run bridge`, not `node scripts/bridge.js`: the npm script
+# carries --env-file-if-exists=.env, and without it a .env-based setup comes
+# back up with no secrets and silently no-ops every reply.
 #
 # Nothing is lost by restarting. Copilot sessions live on disk and are resumed
 # by an id derived from the Teams thread, so conversations survive - only a turn
@@ -41,7 +45,7 @@ if ! tmux has-session -t "$SESSION" 2>/dev/null; then
   echo
   echo "No tmux session \"$SESSION\" - the bridge is not running there."
   echo "Start it with:  tmux new -s $SESSION"
-  echo "then inside:    cd $ROOT && node scripts/bridge.js"
+  echo "then inside:    cd $ROOT && npm run bridge"
   exit 1
 fi
 
@@ -49,7 +53,7 @@ echo
 echo "reloading bridge in tmux session \"$SESSION\"..."
 tmux send-keys -t "$SESSION" C-c
 sleep 2
-tmux send-keys -t "$SESSION" "cd $ROOT && node scripts/bridge.js" Enter
+tmux send-keys -t "$SESSION" "cd $ROOT && npm run bridge" Enter
 sleep 6
 
 echo
