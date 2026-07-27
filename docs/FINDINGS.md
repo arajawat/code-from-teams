@@ -472,3 +472,62 @@ $ grep -oE '"(model|reasoningEffort)":"[^"]*"' ~/.copilot/session-state/<id>/eve
 ```
 
 Effort is recorded, not silently discarded.
+
+## 13. The full loop, proven live
+
+2026-07-27. First real Teams message to the SDK-backed bridge. This is the run that
+closes the project's central question — not "can messages cross the gap" (proven
+earlier with a scripted harness) but "can a real agent do real work through it".
+
+```
++387.6s from       : arajawat (1a2b3c4d-…)
++387.6s text       : "Look at util.js and add input validation to every exported
+                      function. Ask me first how strict you should be…"
++387.6s threadRoot : 1785136979855
++387.6s ROUTED AS NEW PROMPT
++387.7s no session to resume (Session not found), creating teams-1785136979855
++393.2s auto-approved: read  — Search for files matching pattern
++394.5s flow POST -> 202 in 1341ms
++395.4s auto-approved: read  — Read file: util.js
++401.4s auto-approved: shell — List repo files and show package.json
++403.8s auto-approved: read  — Read file: util.test.js
++409.2s ASKING: "How strict should the validation on `add` be?…"
++410.3s flow POST -> 202 in 1182ms
+──────────────────────────────────────────────────────────────
++457.6s from       : arajawat (1a2b3c4d-…)
++457.6s text       : "lets do #1"
++457.6s ROUTED AS ANSWER
++457.6s ANSWER after 48.5s
++463.4s auto-approved: write — Edit file
++468.4s auto-approved: write — Edit file
++475.8s auto-approved: shell — Run node test suite
++479.4s turn complete in 91.7s
+```
+
+Everything that had only been proven in isolation worked together: HMAC on a real
+payload, thread-root derivation, session creation, seven yolo auto-approvals with
+nothing blocked, a question parked for **48.5 seconds** of human thinking time, and
+the answer routed back into the *same* session rather than starting a new one.
+
+The detail worth keeping: the reply was **"lets do #1"**. Nobody types option text on
+a phone. The bridge maps a bare numeral onto the corresponding choice, and that
+mapping is what makes the interaction survive contact with a car.
+
+### The allowlist is now on
+
+The live message revealed the real `aadObjectId`, which is the only trustworthy source
+for it — HMAC proves a message came from Teams, never who typed it.
+
+One hardening applied first. `aadObjectId` is a GUID and its casing is not guaranteed,
+so the comparison now lowercases both sides. Without that, a casing change would lock
+you out of your own bridge behind a message that explains nothing — this project's
+signature failure mode. Verified across four cases:
+
+| sender | outcome |
+|---|---|
+| exact-case allowed id | routed |
+| **UPPERCASE** same id | routed (reached the busy check, which sits *after* the allowlist) |
+| unknown id | rejected |
+| **no `aadObjectId` at all** | rejected — fail-closed, not fail-open |
+
+The last row matters most: an absent id must never be treated as permission.

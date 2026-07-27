@@ -42,9 +42,12 @@ const AUDIT_PATH = process.env.AUDIT_LOG ?? path.join(__dirname, "..", "audit.js
 
 // Who is allowed to drive the agent. HMAC proves a message came from Teams; it
 // says nothing about who typed it. This is the only real access control.
+// Lowercased on both sides: aadObjectIds are GUIDs and casing is not guaranteed
+// to be stable. A casing mismatch would lock you out of your own bridge with a
+// message that says nothing about why.
 const ALLOWED = (process.env.TEAMS_ALLOWED_AAD_IDS ?? "")
   .split(",")
-  .map((s) => s.trim())
+  .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
 
 // Budget for the agent's own work. Time spent waiting for a human to answer a
@@ -461,7 +464,7 @@ const server = http.createServer((req, res) => {
       reply("Could not work out which thread this is.");
       return;
     }
-    if (ALLOWED.length && !ALLOWED.includes(aadId)) {
+    if (ALLOWED.length && !ALLOWED.includes((aadId ?? "").toLowerCase())) {
       log(`REJECTED: ${who} is not on the allowlist`);
       reply("You are not on the allowlist for this bridge.");
       return;
