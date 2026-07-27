@@ -341,6 +341,15 @@ rights.
    not evidence about what the bridge will get. Check with `bash -lic 'node -v'` and fix
    with `nvm alias default 22`.
 
+26. **A broad ignore pattern can silently exclude the template your own setup
+   instructions depend on.** `.gitignore` held `.env` and `.env.*`, and the second
+   pattern also matched **`.env.example`** — so the template was never committed, and
+   `cp .env.example .env` fails on every fresh clone with "No such file or directory".
+   Nothing warns you: `git add -A` succeeds, `git status` is clean, and the file is
+   present on the machine that wrote the docs. Negate the exception explicitly
+   (`!.env.example`, which must come *after* the pattern it exempts) and then verify the
+   only way that counts — clone into a temp directory and check the file is there.
+
 ---
 
 ## 7. Tenant and environment constraints (this tenant)
