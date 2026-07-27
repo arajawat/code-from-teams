@@ -11,14 +11,13 @@ The goal is conversational fidelity, not task submission:
 The agent can ask you a question mid-task and wait for your answer, exactly as it does
 in a terminal.
 
-**Core abstraction:** `1 Teams thread = 1 Copilot session = 1 branch`
+**Core abstraction:** `1 Teams thread = 1 Copilot session`
 
-**Status:** the transport is done and proven live. A single run against real Teams did
-all of this in one thread — acked inside the 5-second window, asked a question with
-options, **parked for 159 seconds** while the user was away, routed the reply as an
-answer rather than a new prompt, then posted again **5 minutes later** into the same
-thread. What's left is swapping the scripted scenario for a Copilot SDK session; that
-work has no external dependencies. See [docs/FINDINGS.md](docs/FINDINGS.md).
+**Status:** working end to end against real Teams. One live run: acked inside the
+5-second window, auto-approved 7 tools, asked a question with options, **parked 48
+seconds** while the user was away, took `"lets do #1"` as the answer rather than a new
+prompt, and finished in 91 seconds. Reply to that thread days later and it still knows
+what you decided. See [docs/FINDINGS.md](docs/FINDINGS.md).
 
 ---
 
@@ -29,17 +28,17 @@ Teams channel thread
       │  @mention  →  outgoing webhook  (HMAC signed, must answer within 5s)
       ▼
 Bridge (node, :3978, exposed via tunnel)
-      │  verify HMAC → allowlist check → derive sessionId → ack inside 5s
+      │  verify HMAC → allowlist → derive sessionId → ack inside 5s
       ▼
-Copilot SDK session  (cwd = repo clone, resumed by caller-supplied id)
+Copilot SDK session  (cwd = your repo, resumed by caller-supplied id)
       │  milestones, questions, final result
       ▼
 Power Automate flow  →  "Reply with a message in a channel"  →  SAME thread
 ```
 
 Inbound and outbound use **different mechanisms**, because a Teams outgoing webhook can
-only reply inside a 5-second HTTP response window. Anything later — a milestone, the
-final result, a question — goes back through a Power Automate flow.
+only reply inside a 5-second HTTP response window. Anything later — a milestone, a
+question, the final result — goes back through a Power Automate flow.
 
 The session id is *derived*, never stored:
 
@@ -48,29 +47,33 @@ const sessionId = "teams-" + conversation.id.split(";messageid=")[1];
 ```
 
 The `;messageid=` suffix is the thread root and is stable for every message in a thread.
+That is the whole persistence design: no database, no mapping table, nothing to go stale.
 
 ---
 
 ## Documentation
 
-- **[docs/FINDINGS.md](docs/FINDINGS.md)** — what we tried, what worked, what failed,
-  and what we deliberately didn't try because a better option existed. Read this first.
+- **[docs/FINDINGS.md](docs/FINDINGS.md)** — what worked, what failed, and what we
+  deliberately didn't try because a better option existed. Read this first.
 - **[docs/DESIGN.md](docs/DESIGN.md)** — the running design log with full rationale.
 
 ---
 
-## Setup
+## One-time setup
+
+Three cloud-side pieces. You do these once; they survive machine moves.
 
 ### 1. Teams outgoing webhook (inbound)
 
 Team owner → **Manage team** → **Apps** → *Create an outgoing webhook* (bottom of page).
-Set the callback URL to your tunnel. Save the security token.
+Point the callback URL at your tunnel (step 2). Save the security token — that is
+`TEAMS_WEBHOOK_SECRET`.
 
-> Mentions must be selected from the **autocomplete dropdown**. Typing `@name` as plain
+> Mentions must be picked from the **autocomplete dropdown**. Typing `@name` as plain
 > text does not fire the webhook.
 >
-> **Every message must @mention the webhook — including replies.** A bare "yes" in the
-> thread never reaches the bridge, so any question the agent asks has to remind you.
+> **Every message needs the @mention, including replies.** A bare "yes" never reaches
+> the bridge, so any question the agent asks has to remind you.
 
 ### 2. Tunnel
 
@@ -84,12 +87,13 @@ sudo apt install -y libicu78                         # required; it's a .NET bin
 devtunnel user login
 devtunnel create teams-bridge -a                     # -a = anonymous; Teams needs it
 devtunnel port create teams-bridge -p 3978
-devtunnel host teams-bridge
 ```
 
-The name makes the URL stable, so the webhook's callback URL is set once. VS Code's
-Ports panel also works for a quick proof — **set visibility to Public**, it defaults to
-Private and fails silently — but the URL churns on restart and it dies with the editor.
+The name makes the URL stable, so the webhook callback is set once. The tunnel belongs
+to your **account, not your machine** — see [Another machine](#another-machine).
+
+> Tunnels carry a **30-day expiration**. If one lapses you get a new URL and must update
+> the webhook by hand. Re-hosting periodically avoids it.
 
 ### 3. Power Automate flow (outbound)
 
@@ -108,19 +112,67 @@ Then edit the flow and replace `Post card in a chat or channel` with:
 | Message Id | `triggerBody()?['threadRoot']` |
 | Message | `triggerBody()?['text']` |
 
-If the flow gets auto-disabled within a minute or two, that's a DLP policy in the
-Default environment. Export the flow as a package and import it into an environment with
-a looser policy — DLP is evaluated **per environment**.
+The trigger's **HTTP POST URL** is `TEAMS_FLOW_URL`.
+
+> If the flow auto-disables within a minute or two, that's a DLP policy in the Default
+> environment. Export it as a package and import into an environment with a looser
+> policy — DLP is evaluated **per environment**.
 
 ---
 
-## Pointing it at a repo
-
-Non-secret settings live in `bridge.config.json`. Copy the example and edit it:
+## Running it
 
 ```sh
-cp bridge.config.example.json bridge.config.json
-$EDITOR bridge.config.json
+npm install                                          # needs node >= 22.12
+
+tmux new -d -s tunnel '~/bin/devtunnel host teams-bridge'
+tmux new -d -s bridge 'cd ~/workspace/code-from-teams && npm run bridge'
+```
+
+**Both sessions are required.** `devtunnel host` exits with its terminal, and a dead
+tunnel does not fail loudly: the public URL still resolves, hangs ~15s and returns an
+empty 200, so Teams times out at 5s and blames the webhook while the bridge logs
+nothing. **If the bridge log is empty, the problem is never in the bridge.**
+
+### The two secrets
+
+`TEAMS_WEBHOOK_SECRET` and `TEAMS_FLOW_URL` are both bearer secrets — the flow URL's
+`sig=` parameter *is* its auth. Either put them in `.env` (gitignored):
+
+```sh
+cp .env.example .env && $EDITOR .env
+```
+
+…or keep them off disk entirely, exported in the bridge shell only:
+
+```sh
+read -rs TEAMS_WEBHOOK_SECRET && export TEAMS_WEBHOOK_SECRET
+read -rs TEAMS_FLOW_URL       && export TEAMS_FLOW_URL
+```
+
+### Watching and checking
+
+```sh
+tmux attach -t bridge       # Ctrl+B, release, then D to detach
+
+curl -s -m 15 -o /dev/null -w '%{http_code} in %{time_total}s\n' \
+  -X POST https://<your-tunnel>/api/messages -d '{}'
+```
+
+A fast response means healthy — the probe is unsigned, so rejecting it is correct.
+~15s and an empty body means the tunnel is down.
+
+> WSL can shut down when the last terminal closes, killing tmux with it. Keep one
+> terminal open, or `sudo loginctl enable-linger $USER`.
+
+---
+
+## Configuration
+
+Non-secret settings live in `bridge.config.json`:
+
+```sh
+cp bridge.config.example.json bridge.config.json && $EDITOR bridge.config.json
 npm run reload
 ```
 
@@ -134,31 +186,30 @@ npm run reload
 }
 ```
 
-`npm run reload` validates the config **before** touching the running bridge, then
-restarts it inside its existing tmux window — so `TEAMS_WEBHOOK_SECRET` and
-`TEAMS_FLOW_URL` never have to leave that shell's environment. Nothing is lost:
-Copilot sessions live on disk and resume by an id derived from the Teams thread, so
-conversations survive a reload.
+`npm run reload` validates everything **before** touching the running bridge, then
+restarts it inside its existing tmux window — so the secrets never leave that shell.
+Nothing is lost: sessions live on disk and resume by their derived id, so conversations
+survive a reload.
 
 Secrets are deliberately **not** allowed in this file. Environment variables override
 anything set here, for one-off runs.
 
-### What a repo needs
+`allowedAadIds` is the only real authorisation control. Send one message and the bridge
+logs the sender's `aadObjectId`; put that in the list.
+
+### What the target repo needs
 
 The startup banner checks these and complains loudly if any is missing:
 
 | requirement | why |
 |---|---|
-| exists, and is a git repo | obvious, but worth catching before a turn starts |
-| **a git identity** | `git commit` fails without one, and the *global* identity is often unset — set `git -C <repo> config user.name/user.email` |
+| exists, and is a git repo | worth catching before a turn starts, not during one |
+| **a git identity** | `git commit` fails without one, and the *global* identity is often unset |
 | an `origin` remote | needed to push or open PRs |
 | not sitting on `main` | a yolo agent with commit rights on `main` is a bad afternoon |
 
-Pushing and opening PRs works if `gh auth status` is logged in — `gh` doubles as git's
-credential helper. `repo` scope is enough.
-
-An `AGENTS.md` in the target repo is the cheapest way to fix the tone, because the
-agent is being read aloud on a phone:
+An `AGENTS.md` in that repo is the cheapest way to fix the tone, because the agent is
+being read aloud on a phone:
 
 ```md
 Replies are read on a phone, often in a car. Keep them under three sentences.
@@ -168,149 +219,39 @@ When you need a decision, ask one question with numbered options.
 
 ---
 
-## Moving to another machine
+## Another machine
 
-Most of this is portable. The thing that usually hurts — repointing the Teams
-webhook — turns out not to, because **the dev tunnel is an account-level object, not
-a machine one**. Hosting `teams-bridge` from a different box with the same account
-serves the *same URL*, so Teams and Power Automate need no changes at all.
+The dev tunnel is an **account-level object**, so `devtunnel host teams-bridge` from any
+box signed into the same account serves the *same URL*. Nothing in Teams or Power
+Automate changes, and thread ids still derive to the same session ids.
 
-```sh
-# 1. code  (see "Getting the code onto a new box" below - this repo needs a remote first)
-git clone git@github.com:<you>/code-from-teams.git
-cd code-from-teams && npm install                              # needs node >= 22.12
+So a move is only: `npm install` (node >= 22.12), `devtunnel user login`, your
+[configuration](#configuration) and [secrets](#the-two-secrets), and a **global** git
+identity on the new box (`git config --global user.name / user.email`) — that missing
+identity is the classic trap, surfacing as a failed commit minutes into a turn rather
+than at startup.
 
-# 2. copilot auth - headless, no browser needed on a devbox
-export GH_TOKEN=<token>        # or COPILOT_GITHUB_TOKEN / GITHUB_TOKEN
-#   ...or interactively:  copilot login
-gh auth login                  # for git push / gh pr create
-
-# 3. git identity - set it GLOBALLY here, this is the classic trap
-git config --global user.name  "Your Name"
-git config --global user.email "you@example.com"
-
-# 4. devtunnel install + sign in (same account = same URL, nothing to change in Teams)
-devtunnel user login
-
-# 5. settings
-cp bridge.config.example.json bridge.config.json && $EDITOR bridge.config.json
-
-# 6. TWO tmux sessions - the tunnel needs its own, and it dies with its terminal
-tmux new -s tunnel        # inside:  devtunnel host teams-bridge
-tmux new -s bridge        # inside:  the two exports below, then node scripts/bridge.js
-
-# 7. secrets, in the bridge shell only - never on disk
-read -rs TEAMS_WEBHOOK_SECRET && export TEAMS_WEBHOOK_SECRET
-read -rs TEAMS_FLOW_URL       && export TEAMS_FLOW_URL
-node scripts/bridge.js
-```
-
-**Both sessions are required.** The tunnel is not a background service — `devtunnel host`
-exits when its terminal goes away, and a dead tunnel does not fail loudly. Teams times
-out and blames the webhook while the bridge log stays completely empty. If the bridge log
-is empty, the problem is never in the bridge.
-
-### Getting the code onto a new box
-
-This repo starts life with **no remote** — it only exists where it was written. Give it
-one before you rely on being able to move:
-
-```sh
-gh repo create code-from-teams --private --source=. --remote=origin --push
-```
-
-Copilot auth accepts fine-grained PATs with **Copilot Requests** permission, OAuth
-tokens from the Copilot CLI app, and OAuth tokens from `gh`. Classic `ghp_` tokens are
-**not** supported.
-
-### What does not move, and does not need to
-
-| thing | status |
-|---|---|
-| Power Automate flow / `TEAMS_FLOW_URL` | cloud-side, unchanged |
-| Teams outgoing webhook + its secret | unchanged, *provided the tunnel URL is reused* |
-| Teams thread ids | unchanged, so session ids still derive correctly |
-
-### Optional: bring conversations with you
-
-Thread memory lives in `~/.copilot/session-state/teams-*`. Copy those directories and
-old threads keep their history. Skip it and they degrade gracefully — `resumeSession`
-throws, the bridge creates with the same derived id, and the thread simply starts fresh.
-
-`COPILOT_HOME` relocates that directory, which is the hook to use if you ever want
-session state on a mounted volume rather than a home directory.
-
-### The one thing that will bite you
-
-The tunnel carries a **30-day expiration**. If it lapses you get a *new* URL, and then
-you really do have to update the Teams webhook. Re-hosting periodically avoids it.
+Thread memory lives in `~/.copilot/session-state/teams-*`. Copy it to bring
+conversations along; skip it and threads degrade gracefully to fresh ones.
+`COPILOT_HOME` relocates that directory if you want state on a mounted volume.
 
 ---
 
 ## Scripts
 
-Copy `.env.example` to `.env` and fill in both secrets, then every script picks them
-up automatically:
-
-```sh
-cp .env.example .env
-$EDITOR .env
-npm run bridge
-```
-
-`.env` is gitignored. Both values are bearer secrets — the flow URL's `sig=` parameter
-*is* its auth.
-
-Prefer not to keep them on disk? Export them per shell instead:
-
-```sh
-read -rs TEAMS_WEBHOOK_SECRET && export TEAMS_WEBHOOK_SECRET
-read -rs TEAMS_FLOW_URL       && export TEAMS_FLOW_URL
-```
-
-## Keeping it running
-
-Both the bridge **and** the tunnel must stay up. A stopped tunnel does not fail fast —
-the public URL still resolves, hangs ~15s and returns an empty 200, so Teams times out
-at 5s and blames the webhook while the bridge logs nothing.
-
-```sh
-tmux new -d -s tunnel '~/bin/devtunnel host teams-bridge'
-tmux new -d -s bridge 'cd ~/workspace/code-from-teams && npm run bridge'
-
-tmux ls                     # what's running
-tmux attach -t bridge       # watch logs; Ctrl+B release, then D to detach
-```
-
-WSL can shut down when the last terminal closes, killing tmux with it. Keep one
-terminal open on WSL, or `sudo loginctl enable-linger $USER`.
-
-Health check:
-
-```sh
-curl -s -m 15 -o /dev/null -w '%{http_code} in %{time_total}s\n' \
-  -X POST https://<your-tunnel>/api/messages \
-  -H 'Content-Type: application/json' -d '{"type":"message","text":"probe"}'
-```
-
-Fast response + `signature check failed` means everything is healthy (the probe is
-unsigned, so rejecting it is correct). ~15s and an empty body means the tunnel is down.
-
 | Script | Purpose |
 |---|---|
-| `scripts/teams-webhook-test.js` | Minimal inbound receiver. Prints the parsed payload, thread root and derived session id. |
-| `scripts/teams-roundtrip-test.js` | Full scenario: instant ack → question with options → answer routing → delayed post 5 minutes later. |
-| `scripts/postflow.js` | Post one message into a thread via the flow. |
-| `scripts/soakflow.js` | Post on an interval to detect a flow being silently suspended. |
+| `npm run bridge` | The bridge itself. |
+| `npm run reload` | Apply `bridge.config.json` to the running bridge. |
+| `npm run msg -- "text"` | Send a signed fake Teams message locally. `--thread <id>` to pick a thread. |
+| `npm run mockflow` | Stand in for the Power Automate flow, so the whole loop runs offline. |
+| `npm run harness` | The original scripted round-trip: ack → question → answer → delayed post. |
+| `npm run post -- <threadRoot> "hi"` | Post one message into a thread via the flow. |
+| `npm run soak -- <threadRoot> 60 15` | Post on an interval to catch a silently suspended flow. |
 
-```sh
-node scripts/teams-roundtrip-test.js                    # full scenario
-node scripts/postflow.js <threadRoot> "hello"           # single post
-node scripts/soakflow.js <threadRoot> 60 15             # every 60s for 15 min
-```
-
-`teams-roundtrip-test.js` honours `PORT`, `QUESTION_DELAY_MS`, `DELAYED_REPLY_MS` and
-`ANSWER_TIMEOUT_MS` for faster iteration.
+`msg` + `mockflow` together exercise the full path with zero Teams messages.
+`scripts/teams-webhook-test.js` is a bare inbound receiver, useful when you only want
+to see what Teams actually posts.
 
 ---
 
@@ -320,16 +261,16 @@ The bridge runs an agent with tools auto-approved, on a machine holding real Git
 credentials, driven by a chat channel.
 
 - **HMAC proves the request came from Teams. It does not prove who sent it.** The
-  `aadObjectId` allowlist is the only authorisation control.
-- Private team of one.
-- Audit log of **every** message, not just rejected ones — after an incident the
-  question is "what did it run", not just "who knocked".
-- Branch protection as a server-side backstop. An `AGENTS.md` line saying "never push to
-  main" is a suggestion, not a boundary.
-- Both `TEAMS_WEBHOOK_SECRET` and `TEAMS_FLOW_URL` are bearer secrets. The flow URL's
-  `sig=` parameter *is* its auth. Register them as `secret-env-vars` so the agent's
-  shell tools can't echo them into a Teams thread.
+  `aadObjectId` allowlist is the only authorisation control, and it is fail-closed —
+  a message with no `aadObjectId` is rejected.
+- The agent's environment has both Teams secrets **removed at spawn time** — it has a
+  shell, so anything left in `process.env` is one `env` away from the channel.
+- Audit log of every permission, with the agent's own stated intention, in
+  `audit.jsonl`. With auto-approval on, this is the only record of what it did.
+- Branch protection as a server-side backstop. An `AGENTS.md` line saying "never push
+  to main" is a suggestion, not a boundary.
 
 **Residual and unsolved: prompt injection.** The allowlist governs who *talks* to the
 agent, not what it *reads*. A hostile string in a repo file, issue or fetched page can
-steer it using your credentials.
+steer it using your credentials — and yolo mode removes the prompt that would have
+caught it.
