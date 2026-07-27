@@ -608,3 +608,71 @@ Worth being clear about what this does *not* prove. If session state is ever del
 session with the same derived id. The thread keeps working; it just starts fresh. That
 is the right failure — a lost conversation, never an error message the user in a car
 has to interpret.
+
+## 16. Shipping this to other people
+
+Worth saying plainly first: **the tunnel and the Power Automate flow are scaffolding,
+not architecture.** They exist because app sideloading is blocked in this tenant, which
+killed the Azure Bot path on day one. Every awkward part of this system traces back to
+that single constraint. Read the ladder below with that in mind — most of it is not
+work, it is one unblock.
+
+### Stage 0 — today: one person, one machine
+
+Works, end to end, proven. One developer, one laptop, one tunnel, one repo, one thread
+at a time. Good enough to demo and genuinely useful for the person who set it up.
+
+### Stage 1 — your immediate team
+
+Reachable, but three things get uncomfortable:
+
+| problem | why it bites |
+|---|---|
+| **The agent uses one GitHub token** | Whoever types, the work is done *as the person who started the bridge*. The allowlist limits who can drive; it cannot make them act as themselves. |
+| **The flow posts as you** | Power Automate replies come from the account that owns the flow, so the agent appears to be you talking to yourself. |
+| **One turn at a time** | A single working directory means a second thread gets "I'm busy". |
+
+The third is the only one that is genuinely cheap to fix: repo-per-thread
+(`WORK_ROOT/<threadRoot>`) removes the lock and lets threads run in parallel. The first
+two are not fixable at this layer.
+
+### Stage 2 — the actual product: bring back the Azure Bot
+
+This is the whole answer, and it is worth being blunt that it collapses nearly every
+workaround in this document at once:
+
+| workaround today | with a bot |
+|---|---|
+| devtunnel, which dies silently | a real HTTPS endpoint |
+| Power Automate for outbound | proactive messages, native |
+| the 5-second webhook window | gone — plus typing indicators |
+| **@mention on every single message** | gone in 1:1 chat |
+| flow posts as you | the bot posts as itself |
+| no per-user identity | real user identity on every activity |
+
+None of that is research. It is blocked by a policy toggle, not by a technical problem.
+If this project gets one thing funded, it should be that.
+
+### Stage 3 — hosting
+
+Move off the laptop to a container with a persistent volume for `~/.copilot/session-state`
+(or a real store). Note this is *only* about durability: §15 showed session state already
+survives restarts and days, so nothing about the design changes — it just stops depending
+on one machine staying awake.
+
+### Stage 4 — identity, which is the real unlock
+
+Each user authorises their own GitHub access, and the agent acts as *them*. Until this
+exists, "ship it to other users" is not honest — you are handing people a shell that
+commits under someone else's name. This is the line between a demo and a product.
+
+### What to say in the pitch
+
+The demo is not "an AI wrote some code". It is:
+
+> I asked for something from my phone. It asked me a clarifying question. I answered
+> forty-eight seconds later with "lets do #1". It finished the work and told me when it
+> was done — and if I reply to that thread on Thursday, it still knows what we decided.
+
+That is a *conversation*, not a command. Everything in this document exists to protect
+that one property.
