@@ -1,14 +1,60 @@
 {
-  "_comment": "Copy to bridge.config.json. Non-secret settings only - secrets stay in the environment (see .env.example). Every field is optional; env vars override anything set here.",
+  "_README": [
+    "Copy to bridge.config.json. NON-SECRET settings only - secrets stay in .env",
+    "(see .env.example). Every field is optional; the defaults below are what you",
+    "get if you delete it. Environment variables override anything set here.",
+    "Keys starting with _ are documentation and are ignored by the loader.",
+    "Apply changes with `npm run reload`, which validates BEFORE stopping anything."
+  ],
 
+  "_repoDir": [
+    "The repo the agent actually works in. Point this at a scratch clone, not at",
+    "the bridge's own directory. Default: the bridge directory, which is rarely",
+    "what you want. ~ is expanded. The startup banner refuses to stay quiet if",
+    "the path is missing, is not a git repo, or has no git identity configured -",
+    "that last one otherwise surfaces as a failed commit minutes into a turn.",
+    "Env: REPO_DIR"
+  ],
   "repoDir": "~/workspace/bridge-scratch",
 
+  "_model": [
+    "Pinned on purpose. Leaving it unset takes the runtime default, which drifts",
+    "as new models ship. Env: COPILOT_MODEL"
+  ],
   "model": "claude-opus-5",
+
+  "_effort": [
+    "One of low, medium, high, xhigh. (listModels() also reports 'max', though",
+    "the published types omit it and it is unverified here.) Also pinned: the",
+    "runtime default resolved to 'medium', so the agent was quietly thinking less",
+    "hard than it could. Env: COPILOT_EFFORT"
+  ],
   "effort": "xhigh",
 
+  "_yolo": [
+    "Auto-approve every tool call. There is no human-in-the-loop approval path",
+    "over Teams, so setting this false does not prompt you - it denies tools and",
+    "the agent can only talk. True is what makes 'code from Teams' actually code.",
+    "It also means anyone who gets past the allowlist runs commands on this box.",
+    "Env: YOLO (set to 0 for false)"
+  ],
   "yolo": true,
 
+  "_voiceFile": [
+    "Appended to the system prompt so replies suit someone reading on a phone at",
+    "a traffic light rather than a terminal. Measured effect: 1460 chars over 64",
+    "lines with a code fence, down to 694 chars over 5 lines with none.",
+    "A missing file is a loud warning in the banner, not a silent revert.",
+    "Env: TEAMS_VOICE_FILE"
+  ],
   "voiceFile": "prompts/teams-voice.md",
 
+  "_allowedAadIds": [
+    "THE ONLY REAL AUTHORISATION CONTROL. HMAC proves a message came from Teams;",
+    "it says nothing about who sent it. An empty list means ANYONE in the channel",
+    "can run code here. To fill it: send one message and read the sender's",
+    "aadObjectId out of the bridge log. Compared case-insensitively, fail-closed.",
+    "Env: TEAMS_ALLOWED_AAD_IDS (comma-separated)"
+  ],
   "allowedAadIds": []
 }

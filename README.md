@@ -373,6 +373,21 @@ npm run reload
 }
 ```
 
+Every field is optional. `bridge.config.example.json` carries a description of each one
+inline; the short version:
+
+| field | default | what it does |
+|---|---|---|
+| `repoDir` | the bridge's own directory | the repo the agent works in — point it at a scratch clone. `~` expands. Checked at startup for existence, being a git repo, and a **git identity**, because a missing identity otherwise fails a commit minutes into a turn |
+| `model` | runtime default | pinned, because the runtime default drifts as new models ship |
+| `effort` | runtime default | `low` \| `medium` \| `high` \| `xhigh`. Also pinned — the default resolved to `medium`, so the agent was quietly thinking less hard than it could |
+| `yolo` | `true` | auto-approve every tool call. `false` does **not** prompt you — there is no approval path over Teams — it denies tools outright |
+| `voiceFile` | `prompts/teams-voice.md` | appended to the system prompt so replies suit a phone. Missing file = loud banner warning, not a silent revert |
+| `allowedAadIds` | `[]` — **anyone in the channel** | the only real authorisation control |
+
+There are also 15 environment-only knobs — timeouts, heartbeat, post size, audit path,
+and the local test harness — all documented in `.env.example`.
+
 `npm run reload` validates everything **before** touching the running bridge, then
 restarts it inside its existing tmux window — so the secrets never leave that shell.
 Nothing is lost: sessions live on disk and resume by their derived id, so conversations
@@ -381,8 +396,9 @@ survive a reload.
 Secrets are deliberately **not** allowed in this file. Environment variables override
 anything set here, for one-off runs.
 
-`allowedAadIds` is the only real authorisation control. Send one message and the bridge
-logs the sender's `aadObjectId`; put that in the list.
+`allowedAadIds` is the only real authorisation control. HMAC proves a message came from
+Teams; it says nothing about *who* sent it. Send one message and the bridge logs the
+sender's `aadObjectId`; put that in the list.
 
 ### How the replies sound
 
