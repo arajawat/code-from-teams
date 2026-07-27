@@ -676,3 +676,47 @@ The demo is not "an AI wrote some code". It is:
 
 That is a *conversation*, not a command. Everything in this document exists to protect
 that one property.
+
+## 17. Portability: what is actually machine-bound
+
+Asked what it takes to move this to another devbox, the assumption was that the
+tunnel URL would change and the Teams outgoing webhook would have to be repointed —
+the one step that lives in a UI and cannot be scripted.
+
+That turns out to be wrong, and pleasantly so. **A dev tunnel is an account-level
+object, not a machine-level one:**
+
+```
+Tunnel ID : teams-bridge.asse
+Ports     : 3978  https://a1b2c3d4-3978.euw.devtunnels.ms/
+Expiration: 30 days
+```
+
+`devtunnel host teams-bridge` from any machine signed into the same account serves
+that same URL. So Teams, the webhook secret, and the Power Automate flow are all
+untouched by a move. Thread ids are unchanged too, so derived session ids still line up.
+
+What genuinely has to be redone on a new box:
+
+| step | note |
+|---|---|
+| node ≥ 22.12, `npm install` | SDK 1.0.8 requires `^20.19.0 \|\| >=22.12.0` |
+| Copilot auth | `copilot login`, **or headless** via `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN` |
+| `gh auth login` | for push and PR creation |
+| **global git identity** | the §14 landmine — set it globally on a fresh box |
+| devtunnel install + `devtunnel user login` | `libicu` needed on Ubuntu |
+| `bridge.config.json` | gitignored, recreate from the example |
+| the two secrets | exported into the bridge shell |
+
+Headless auth matters more than it looks: a devbox has no browser, and `copilot login`
+defaults to a device flow. `GH_TOKEN=$(gh auth token)` sidesteps it. Fine-grained PATs
+need the **Copilot Requests** permission; classic `ghp_` tokens are rejected outright.
+
+Conversation history is portable but optional — copy `~/.copilot/session-state/teams-*`
+to bring threads along, or skip it and let them start fresh (§15). `COPILOT_HOME`
+relocates that directory, which is the hook for putting session state on a mounted
+volume when this eventually moves into a container (§16, stage 3).
+
+**The real expiry risk:** the tunnel has a 30-day expiration. If it lapses, the URL
+changes and the Teams webhook *does* have to be updated by hand. That, not the machine
+move, is the thing to watch.

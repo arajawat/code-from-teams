@@ -168,6 +168,70 @@ When you need a decision, ask one question with numbered options.
 
 ---
 
+## Moving to another machine
+
+Most of this is portable. The thing that usually hurts — repointing the Teams
+webhook — turns out not to, because **the dev tunnel is an account-level object, not
+a machine one**. Hosting `teams-bridge` from a different box with the same account
+serves the *same URL*, so Teams and Power Automate need no changes at all.
+
+```sh
+# 1. code
+git clone <this repo> && cd code-from-teams && npm install     # needs node >= 22.12
+
+# 2. copilot auth - headless, no browser needed on a devbox
+export GH_TOKEN=<token>        # or COPILOT_GITHUB_TOKEN / GITHUB_TOKEN
+#   ...or interactively:  copilot login
+gh auth login                  # for git push / gh pr create
+
+# 3. git identity - set it GLOBALLY here, this is the classic trap
+git config --global user.name  "Your Name"
+git config --global user.email "you@example.com"
+
+# 4. tunnel - same account, same URL, nothing to update in Teams
+devtunnel user login
+devtunnel host teams-bridge
+
+# 5. settings
+cp bridge.config.example.json bridge.config.json && $EDITOR bridge.config.json
+
+# 6. secrets, in the bridge shell only
+read -rs TEAMS_WEBHOOK_SECRET && export TEAMS_WEBHOOK_SECRET
+read -rs TEAMS_FLOW_URL       && export TEAMS_FLOW_URL
+
+# 7. go
+tmux new -s bridge
+node scripts/bridge.js
+```
+
+Copilot auth accepts fine-grained PATs with **Copilot Requests** permission, OAuth
+tokens from the Copilot CLI app, and OAuth tokens from `gh`. Classic `ghp_` tokens are
+**not** supported.
+
+### What does not move, and does not need to
+
+| thing | status |
+|---|---|
+| Power Automate flow / `TEAMS_FLOW_URL` | cloud-side, unchanged |
+| Teams outgoing webhook + its secret | unchanged, *provided the tunnel URL is reused* |
+| Teams thread ids | unchanged, so session ids still derive correctly |
+
+### Optional: bring conversations with you
+
+Thread memory lives in `~/.copilot/session-state/teams-*`. Copy those directories and
+old threads keep their history. Skip it and they degrade gracefully — `resumeSession`
+throws, the bridge creates with the same derived id, and the thread simply starts fresh.
+
+`COPILOT_HOME` relocates that directory, which is the hook to use if you ever want
+session state on a mounted volume rather than a home directory.
+
+### The one thing that will bite you
+
+The tunnel carries a **30-day expiration**. If it lapses you get a *new* URL, and then
+you really do have to update the Teams webhook. Re-hosting periodically avoids it.
+
+---
+
 ## Scripts
 
 Copy `.env.example` to `.env` and fill in both secrets, then every script picks them
