@@ -926,7 +926,7 @@ to forget the tunnel is a real hazard, including a runbook that does not mention
 
 ```sh
 tmux new -s tunnel     # devtunnel host teams-bridge
-tmux new -s bridge     # node scripts/bridge.js
+tmux new -s bridge     # npm run bridge
 ```
 
 ## 18. Stopping and starting, measured
