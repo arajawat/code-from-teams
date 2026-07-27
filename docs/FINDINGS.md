@@ -323,6 +323,24 @@ rights.
    because a wrong account would not see a conflict at all. Skip both `create` and
    `port create`, and go straight to `devtunnel host teams-bridge`.
 
+23. **A tmux session inherits the environment of the shell that started the tmux
+   *server*, not the shell that ran `tmux new`.** `PATH` and your own variables are not
+   in `update-environment`, so `export SECRET=... ; tmux new -d -s bridge ...` hands the
+   bridge nothing if a server was already running — it starts with HMAC verification
+   **off**, accepting unauthenticated requests on a public tunnel, and says so in one
+   banner line you have to be looking for. Put secrets in `.env`: node reads it from
+   **disk** at startup, so no shell inheritance can lose it.
+
+24. **`tmux new -d -s x '<command>'` deletes the session — and the error — when the
+   command exits.** You get a missing session from `tmux ls` and no message at all.
+   Start a shell first and `send-keys` the command into it, so the shell outlives the
+   process and holds the error.
+
+25. **A tmux pane runs a *login* shell, so it resolves nvm's `default` alias, not the
+   version you selected with `nvm use`.** `node -v` in your own terminal is therefore
+   not evidence about what the bridge will get. Check with `bash -lic 'node -v'` and fix
+   with `nvm alias default 22`.
+
 ---
 
 ## 7. Tenant and environment constraints (this tenant)
@@ -1066,3 +1084,95 @@ already established and is not re-authenticated. So the machine looks completely
 and the breakage only surfaces the next time the tunnel is restarted — possibly days
 later, with no obvious connection to what caused it. Check `devtunnel user show` after
 any interrupted login.
+
+---
+
+## 22. tmux does not give you the environment you think it does
+
+Two separate failures on the second machine had the same root cause, and both were
+silent.
+
+### What is actually true
+
+**A tmux session inherits the environment of whatever shell started the tmux *server*,
+not the shell that typed `tmux new`.** The server is started by the *first* session and
+outlives every session created after it.
+
+Measured directly:
+
+```sh
+tmux kill-server
+MARKER=first  tmux new -d -s s1 'sleep 30'     # this starts the SERVER
+MARKER=second tmux new -d -s s2 'sleep 30'     # created from a different env
+tmux new -d -s s3 'echo "MARKER=$MARKER" > /tmp/out; sleep 5'   # no MARKER at all
+cat /tmp/out
+```
+
+`MARKER=first`. The third session was created from a shell where `MARKER` was **not
+set**, and it received the value from a shell that had exited minutes earlier.
+`update-environment` only refreshes a short fixed list (`DISPLAY`, `SSH_AUTH_SOCK` and
+friends) — `PATH` and your own variables are not on it.
+
+### Consequence 1: exported secrets never arrive
+
+```sh
+export TEAMS_WEBHOOK_SECRET=...      # in your normal shell
+tmux new -d -s bridge ...            # server already running -> does NOT see it
+```
+
+The bridge starts with `HMAC OFF` and `outbound flow NOT SET`. It does not crash, does
+not warn beyond one banner line, and **accepts unauthenticated requests** — on a public
+anonymous tunnel, with yolo on. The failure is a security hole that looks like a
+successful start.
+
+`.env` is immune, because node reads it off **disk** at process start, not from the
+environment. Verified: server started first, `.env` written afterwards, secret still
+arrived. This is now the recommended path, and the reason is this finding rather than
+convenience.
+
+The export route still works, but only if typed **inside the bridge pane** before
+launching the process.
+
+### Consequence 2: the wrong node
+
+The bridge died instantly on the second machine because the pane had node 20; the SDK
+needs >= 22.12. The subtlety is that this is **not** the server-environment rule — a
+tmux pane runs a *login* shell, which re-sources the profile, which loads nvm, which
+resolves nvm's **`default` alias**. So the pane gets nvm's default, which is often not
+the version you last selected interactively with `nvm use`.
+
+That is why `node -v` in your own terminal is not evidence. The predictive check is:
+
+```sh
+bash -lic 'node -v'          # what a tmux pane will actually resolve
+nvm alias default 22         # the fix - persistent, unlike `nvm use`
+```
+
+Confirmed by poisoning the server's `PATH` to `/usr/bin:/bin` and observing panes still
+find nvm's node: the login shell repairs `PATH` regardless of what the server holds.
+
+### Consequence 3: a failed command deletes its own evidence
+
+```sh
+tmux new -d -s bridge 'cd /repo && npm run bridge'
+```
+
+If the command exits, **tmux destroys the session**, and the error with it. `tmux ls`
+then simply omits the session — no message, no exit code, nothing to read. This is how
+the node 20 failure presented: two commands typed, one session listed, zero output.
+
+Start a shell first and send the command to it. The shell survives the process, so the
+error stays on screen and `tmux capture-pane -p -t bridge` retrieves it without
+attaching:
+
+```sh
+tmux new -d -s bridge
+tmux send-keys -t bridge 'cd /repo && npm run bridge' Enter
+```
+
+### The general lesson
+
+All three are the same shape as landmines 18-21: **a setup step that works on the
+machine that wrote it is not a verified step.** The environment differences between two
+boxes are invisible until a second box runs the instructions, and every one of these
+surfaced as silence rather than an error.

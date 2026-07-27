@@ -177,17 +177,55 @@ The trigger's **HTTP POST URL** is `TEAMS_FLOW_URL`.
 
 ## Running it
 
-```sh
-npm install                                          # needs node >= 22.12
+**Do these in order.** The bridge reads `.env` from disk **once, at startup**, so if you
+start it before the secrets exist it comes up with HMAC verification OFF and no outbound
+URL — and keeps running that way until you restart it.
 
-tmux new -d -s tunnel '~/bin/devtunnel host teams-bridge'
-tmux new -d -s bridge 'cd ~/workspace/code-from-teams && npm run bridge'
+```sh
+# 1. dependencies. Check the version the way TMUX will see it, not the way your
+#    current shell does - a tmux pane runs a login shell, so it resolves nvm's
+#    `default` alias, which is often NOT whatever you last ran `nvm use` on.
+bash -lic 'node -v'                                  # must be >= 22.12
+nvm alias default 22 && nvm install 22               # if it is not
+npm install
+
+# 2. secrets, BEFORE starting the bridge. See "The two secrets" below.
+cp .env.example .env && $EDITOR .env
+
+# 3. settings
+cp bridge.config.example.json bridge.config.json && $EDITOR bridge.config.json
+
+# 4. start. A shell in each session, THEN send the command. Do not use
+#    `tmux new -d -s bridge '<command>'`: if the command exits, tmux deletes the
+#    session and the error goes with it - a missing session and no message.
+tmux new -d -s tunnel
+tmux send-keys -t tunnel '~/bin/devtunnel host teams-bridge' Enter
+
+tmux new -d -s bridge
+tmux send-keys -t bridge "cd $PWD && npm run bridge" Enter
+
+tmux ls                                              # BOTH must be listed
 ```
+
+Then **read the banner** — `tmux capture-pane -p -t bridge`. It prints `HMAC`,
+`outbound flow` and `allowlist` lines precisely so that a bridge running wide open is
+visible rather than assumed. `HMAC OFF` on a public tunnel with yolo on means anyone who
+finds the URL runs code on your box.
 
 **Both sessions are required.** `devtunnel host` exits with its terminal, and a dead
 tunnel does not fail loudly: the public URL still resolves, hangs ~15s and returns an
 empty 200, so Teams times out at 5s and blames the webhook while the bridge logs
 nothing. **If the bridge log is empty, the problem is never in the bridge.**
+
+If a session is missing from `tmux ls`, that process died. With the shell-first form
+above the error is still on screen — `tmux capture-pane -p -t bridge` prints it without
+even attaching.
+
+> **Do not pass secrets by `export`ing them and then running `tmux new`.** A tmux
+> session inherits the environment of whatever shell started the tmux **server**, which
+> may be hours old — not the shell you just typed in. Verified: a session created from a
+> shell with a variable set received a *different, older* value. `.env` is read from
+> disk by node and is immune to this. See [FINDINGS §22](docs/FINDINGS.md).
 
 ### The two secrets
 
@@ -207,18 +245,25 @@ the flow, and anyone holding the webhook secret can forge inbound requests. Trea
 URL with the same care as the key — the fact that it looks like a link is exactly why
 people leak it.
 
-Either put them in `.env` (gitignored):
+Either put them in `.env` (gitignored) — **recommended**, because node reads it from
+disk and no shell or tmux inheritance can lose it:
 
 ```sh
 cp .env.example .env && $EDITOR .env
 ```
 
-…or keep them off disk entirely, exported in the bridge shell only:
+…or keep them off disk entirely. If you do, you must type this **inside the bridge pane**
+(`tmux attach -t bridge`), before starting `npm run bridge` — *not* in an outside shell
+that you then create the session from, which silently does not reach the bridge:
 
 ```sh
+tmux attach -t bridge
 read -rs TEAMS_WEBHOOK_SECRET && export TEAMS_WEBHOOK_SECRET
 read -rs TEAMS_FLOW_URL       && export TEAMS_FLOW_URL
+npm run bridge
 ```
+
+Either way, confirm with the banner: `HMAC ON` and `outbound flow SET`.
 
 ### Watching and checking
 
@@ -275,7 +320,8 @@ Messages sent while paused get a fast `502`, so Teams shows an error immediately
 than sitting there looking like it might still be working. Un-pause:
 
 ```sh
-tmux new -d -s bridge 'cd ~/workspace/code-from-teams && npm run bridge'
+tmux new -d -s bridge
+tmux send-keys -t bridge 'cd ~/workspace/code-from-teams && npm run bridge' Enter
 ```
 
 > **Leave the tunnel up.** Dev tunnels are deleted after **30 days of inactivity** — a
@@ -291,8 +337,11 @@ survives, though, because it belongs to your account, so **Teams and Power Autom
 no changes**.
 
 ```sh
-tmux new -d -s tunnel '~/bin/devtunnel host teams-bridge'
-tmux new -d -s bridge 'cd ~/workspace/code-from-teams && npm run bridge'
+tmux new -d -s tunnel
+tmux send-keys -t tunnel '~/bin/devtunnel host teams-bridge' Enter
+tmux new -d -s bridge
+tmux send-keys -t bridge 'cd ~/workspace/code-from-teams && npm run bridge' Enter
+tmux ls                             # both must be listed
 ```
 
 Then, only if your secrets are **not** in `.env`, re-export them in the bridge shell —
@@ -413,9 +462,12 @@ cd code-from-teams && npm install         # node >= 22.12
 cp bridge.config.example.json bridge.config.json && $EDITOR bridge.config.json
 git config --global user.name "Your Name" && git config --global user.email "you@example.com"
 
-# 3. run it (secrets exported in the bridge shell)
-tmux new -d -s tunnel '~/bin/devtunnel host teams-bridge'
-tmux new -d -s bridge 'cd ~/code-from-teams && npm run bridge'
+# 3. run it - see "Running it" for why this is two commands per session
+tmux new -d -s tunnel
+tmux send-keys -t tunnel '~/bin/devtunnel host teams-bridge' Enter
+tmux new -d -s bridge
+tmux send-keys -t bridge "cd $PWD && npm run bridge" Enter
+tmux ls                                   # both must be listed
 ```
 
 Sign in with the **same account** the tunnel belongs to — `~/bin/devtunnel user show`
