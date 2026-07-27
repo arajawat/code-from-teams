@@ -99,6 +99,7 @@ function askQuestion(threadRoot, question, choices, recommended) {
   });
   lines.push("");
   lines.push("Reply with a number, or just say it in your own words.");
+  lines.push("(@mention me in your reply, or I will not see it.)");
 
   const parked = new Promise((resolve, reject) => {
     const timer = setTimeout(() => {

@@ -355,3 +355,81 @@ SURVIVING VS CODE CLOSING: run the bridge and the tunnel under tmux (or systemd 
 units). CAVEAT: WSL itself can shut down when the last terminal closes, which kills
 both regardless of tmux -- keep one Windows Terminal open on WSL, or
 `sudo loginctl enable-linger $USER`.
+
+## DEAD TUNNEL: THE FAILURE MODE THAT COSTS THE MOST TIME (2026-07-27)
+Symptom: Teams replies instantly with "Sorry, there was a problem encountered with your
+request", attributed to the WEBHOOK'S name (so it looks like the bot answered), and the
+bridge logs NOTHING - not even a rejected request.
+
+Cause: `devtunnel host` was not running. The tunnel does not fail fast. The public
+hostname still resolves, the request hangs ~15s, and then returns HTTP 200 with an
+EMPTY BODY. Teams gives up at 5s. Everything about it says "your app is slow", when in
+fact your app was never reached.
+
+30-SECOND DIAGNOSIS:
+  curl -s -o /dev/null -w '%{http_code} %{time_total}\n' -X POST localhost:3978/api/messages -d '{}'
+  curl -s -o /dev/null -w '%{http_code} %{time_total}\n' -X POST https://<tunnel>/api/messages -d '{}'
+  local fast (~0.015s) + public slow (~15s) => tunnel is dead, restart it.
+  both slow                                 => the bridge is the problem.
+Rule of thumb: if the bridge log is EMPTY, the problem is never in the bridge.
+
+## R6 CLOSED - FULL ROUND TRIP AGAINST REAL TEAMS (2026-07-27)
+The last unproven step. One real thread, root 1785130046292, teams-roundtrip-test.js:
+
+  +229.3s  "ping"  signature true  -> ROUTED AS NEW PROMPT
+  +235.6s  flow POST -> 202 in 1357ms      question posted into the thread
+  +393.3s  "2"     signature true  -> ROUTED AS ANSWER to a parked question
+                                     ANSWER received after 159.0s
+  +394.7s  flow POST -> 202 in 1426ms      choice acknowledged
+  +394.7s  sleeping 300s before the delayed leg...
+  +696.0s  flow POST -> 202 in 1215ms      delayed result, SAME thread (confirmed in UI)
+  +696.0s  scenario complete
+
+Proves, against live Teams and not a mock:
+  1. ack inside the 5s window
+  2. question with numbered options + a recommendation, pushed via the flow
+  3. the bridge parking while the user walks away (159s, no keepalive, no polling)
+  4. the next message routed as an ANSWER, not as a new prompt
+  5. a post 5 MINUTES LATER landing in the same thread
+
+(5) is the whole product. "Ask, walk away, get told when it's done" is now demonstrated
+infrastructure rather than a claim. Also observed in the same log: a mis-signed probe
+was REJECTED, so HMAC rejection is proven on live traffic too.
+
+The scripted scenario is the exact shape of a real turn - ack, ask, wait, work, report.
+Swapping in a Copilot session changes what fills the gaps, not the mechanics.
+
+## LANDMINE: EVERY MESSAGE NEEDS THE @MENTION, INCLUDING REPLIES
+Cost us 20 minutes of debugging a bridge that was working perfectly. An outgoing webhook
+only fires on messages that MENTION it. A bare "yes" in the thread never arrives.
+
+Consequence for the design, not just for the user: the agent's question must SAY SO.
+askQuestion() now appends "(@mention me in your reply, or I will not see it.)".
+Without that line, the user answers, nothing happens, and the turn parks until the
+timeout - looking like a hung agent rather than a missed message.
+
+This is a genuine cost of the webhook route. An Azure Bot receives every message in the
+channel and would not need this. Worth revisiting if sideloading is ever permitted.
+
+## STATUS AFTER R6: TRANSPORT IS DONE
+  R1 threaded outbound reply      CLOSED
+  R5 stable tunnel                CLOSED
+  R6 ask-a-question round trip    CLOSED  <- live, real Teams
+  R7 flow stability               CLOSED
+  R2 security hardening           OPEN  (allowlist, audit log, secret-env-vars)
+  R3 infiniteSessions             OPEN
+  R4 turn timeout                 OPEN
+  -- prompt injection             RESIDUAL, acknowledged, not solved
+Every remaining risk is on OUR side of the wire. Nothing left depends on Teams, Power
+Automate, or tenant policy.
+
+## NEXT: REPLACE THE SCENARIO WITH A COPILOT SESSION
+teams-roundtrip-test.js already contains every piece the real bridge needs - HMAC,
+toPlainText(), threadRootOf(), the parked-question map, the serialize lock, flow POST.
+Only runScenario() is fake. Replace it with:
+  1. npm i @github/copilot-sdk
+  2. resumeSession(`teams-${threadRoot}`) or createSession, infiniteSessions: true
+  3. onPermissionRequest: approveAll     <- MUST be explicit; omitting it HANGS
+  4. onUserInputRequest: ask via the flow, return the parked Promise (already built)
+  5. milestone posts throttled to ~1/15s, then the final result
+  6. question timeout + turn timeout (R4)

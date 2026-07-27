@@ -13,6 +13,13 @@ in a terminal.
 
 **Core abstraction:** `1 Teams thread = 1 Copilot session = 1 branch`
 
+**Status:** the transport is done and proven live. A single run against real Teams did
+all of this in one thread — acked inside the 5-second window, asked a question with
+options, **parked for 159 seconds** while the user was away, routed the reply as an
+answer rather than a new prompt, then posted again **5 minutes later** into the same
+thread. What's left is swapping the scripted scenario for a Copilot SDK session; that
+work has no external dependencies. See [docs/FINDINGS.md](docs/FINDINGS.md).
+
 ---
 
 ## How it works
@@ -61,13 +68,28 @@ Set the callback URL to your tunnel. Save the security token.
 
 > Mentions must be selected from the **autocomplete dropdown**. Typing `@name` as plain
 > text does not fire the webhook.
+>
+> **Every message must @mention the webhook — including replies.** A bare "yes" in the
+> thread never reaches the bridge, so any question the agent asks has to remind you.
 
 ### 2. Tunnel
 
-The bridge listens on `:3978` and needs a public HTTPS URL. VS Code's Ports panel works
-— **set the visibility to Public**, it defaults to Private and fails silently.
+The bridge listens on `:3978` and needs a public HTTPS URL.
 
-`devtunnel` gives a stable URL if re-editing the callback URL each restart grates.
+```sh
+curl -sL https://aka.ms/DevTunnelCliInstall | bash   # lands at ~/bin/devtunnel
+chmod +x ~/bin/devtunnel                             # the installer's sudo step fails
+sudo apt install -y libicu78                         # required; it's a .NET binary
+
+devtunnel user login
+devtunnel create teams-bridge -a                     # -a = anonymous; Teams needs it
+devtunnel port create teams-bridge -p 3978
+devtunnel host teams-bridge
+```
+
+The name makes the URL stable, so the webhook's callback URL is set once. VS Code's
+Ports panel also works for a quick proof — **set visibility to Public**, it defaults to
+Private and fails silently — but the URL churns on restart and it dies with the editor.
 
 ### 3. Power Automate flow (outbound)
 
