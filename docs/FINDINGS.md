@@ -170,7 +170,16 @@ rights.
 8. **Secrets leak through the agent's shell.** `TEAMS_WEBHOOK_SECRET` lives in the
    bridge environment, which tool calls inherit. One `env` would post it into Teams.
    Use `secret-env-vars`.
-9. **Question timeout is non-negotiable.** A parked question holds the turn open, and
+9. **A dead tunnel does not fail fast.** If `devtunnel host` isn't running, the public
+   URL still resolves — requests hang ~15s and return **HTTP 200 with an empty body**,
+   so it looks like a slow app rather than a missing tunnel. Teams gives up at 5s and
+   shows *"Sorry, there was a problem encountered with your request"* attributed to the
+   webhook's name. Diagnose by comparing a direct `localhost:3978` hit (should be
+   ~15ms) against the public URL.
+10. **`devtunnel host` dies with its terminal.** Run it under tmux/systemd, or the
+   bridge silently becomes unreachable while still looking perfectly healthy in its own
+   logs — it never sees the request at all.
+11. **Question timeout is non-negotiable.** A parked question holds the turn open, and
    the global serialize lock allows one turn at a time — so one unanswered question
    blocks the entire bridge forever. Walking away mid-question is the normal case.
 
