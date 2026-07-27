@@ -60,6 +60,17 @@ const MAX_POST_CHARS = num("MAX_POST_CHARS", 3500);
 // announce itself right after the question it is asking.
 const QUIET_TOOLS = new Set(["ask_user", "store_memory", "vote_memory", "manage_schedule"]);
 
+// Yolo: approve every tool the agent asks for, without asking the user.
+// On by default - a permission prompt nobody can see is just a hang, and the
+// person driving this is in a car. Set YOLO=0 to deny instead (useful for
+// proving what the agent *would* have done without letting it).
+//
+// This is NOT the same as suppressing the agent's questions. Permission
+// prompts ("may I edit this file?") are noise on a phone; design questions
+// ("which approach do you want?") are the entire point of the product, and
+// they keep working via onUserInputRequest.
+const YOLO = (process.env.YOLO ?? "1") !== "0";
+
 const t0 = Date.now();
 const stamp = () => `+${((Date.now() - t0) / 1000).toFixed(1)}s`;
 const log = (...a) => console.log(stamp().padStart(9), ...a);
@@ -239,6 +250,16 @@ delete agentEnv.TEAMS_FLOW_URL;
 
 const client = new CopilotClient({ env: agentEnv, workingDirectory: REPO_DIR });
 
+// Every permission variant carries a human-readable `intention`, which is far
+// more useful in an audit log than the tool name. Shell requests also carry
+// the exact command, which is the thing worth being able to review later.
+function describePermission(request) {
+  const kind = request?.kind ?? "unknown";
+  const detail =
+    request?.fullCommandText ?? request?.fileName ?? request?.path ?? request?.url ?? null;
+  return { kind, intention: request?.intention ?? null, detail };
+}
+
 // Resume the thread's session, or start it if this is the first message.
 // Both paths use the SAME derived id, so an old thread picks up where it left
 // off and a wiped session degrades to a fresh one rather than an error.
@@ -247,12 +268,26 @@ async function openSession(threadRoot) {
   const config = {
     workingDirectory: REPO_DIR,
     infiniteSessions: { enabled: true },
-    onPermissionRequest: (...args) => {
-      const req = args[0];
-      audit({ kind: "permission", threadRoot, tool: req?.toolName ?? req?.tool ?? null });
-      return approveAll(...args);
+    onPermissionRequest: (request, invocation) => {
+      const what = describePermission(request);
+      log(`${YOLO ? "auto-approved" : "DENIED"}: ${what.kind} — ${what.intention ?? ""}`);
+      audit({
+        kind: "permission",
+        threadRoot,
+        decision: YOLO ? "approve" : "deny",
+        permissionKind: what.kind,
+        intention: what.intention,
+        detail: what.detail,
+      });
+      return YOLO ? approveAll(request, invocation) : { kind: "deny" };
     },
     onUserInputRequest: (request) => askQuestion(threadRoot, request),
+    // Deliberately NOT provided: onElicitationRequest, onExitPlanModeRequest,
+    // onAutoModeSwitchRequest, onMcpAuthRequest. Unlike permissions - which are
+    // raised regardless and left pending when unhandled - these are capability
+    // gated: "when provided, enables the callback". Leaving them off means the
+    // agent never issues them, so they can never block the bridge. Adding a
+    // handler here would enable a dialog we cannot render in a Teams thread.
   };
   if (MODEL) config.model = MODEL;
 
@@ -313,6 +348,22 @@ async function runTurn(threadRoot, prompt) {
           break;
         case "session.compaction_start":
           log("context compaction started (long thread being summarised)");
+          break;
+        case "session.managed_settings_resolved":
+          // Enterprise policy can disable bypass-permissions ("yolo") mode.
+          // If it is on, auto-approval may be capped and the agent will stall
+          // on its first tool call with no obvious cause - so say so loudly.
+          log(
+            `managed settings: bypassPermissionsDisabled=` +
+              `${event.data.bypassPermissionsDisabled}`,
+          );
+          if (event.data.bypassPermissionsDisabled) {
+            log("!! enterprise policy restricts bypass-permissions mode on this session");
+          }
+          break;
+        case "session.managed_settings_enforced":
+          log("!! managed policy blocked something:", JSON.stringify(event.data).slice(0, 300));
+          audit({ kind: "policy_enforced", threadRoot, data: event.data });
           break;
         case "session.error":
           log("!! session.error:", JSON.stringify(event.data).slice(0, 300));
@@ -445,6 +496,7 @@ async function main() {
     console.log(`repo dir         ${REPO_DIR}`);
     console.log(`model            ${MODEL ?? "(runtime default)"}`);
     console.log(`HMAC             ${SECRET ? "ON" : "OFF (no TEAMS_WEBHOOK_SECRET)"}`);
+    console.log(`yolo             ${YOLO ? "ON (all tools auto-approved)" : "OFF (tools denied)"}`);
     console.log(`outbound flow    ${FLOW_URL ? "SET" : "NOT SET (replies will no-op)"}`);
     console.log(`allowlist        ${ALLOWED.length ? ALLOWED.join(", ") : "OFF (anyone in the channel)"}`);
     console.log(`audit log        ${AUDIT_PATH}`);
