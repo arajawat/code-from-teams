@@ -1,0 +1,457 @@
+// The bridge: Teams thread <-> Copilot SDK session.
+//
+// One Teams thread == one Copilot session == one conversation with memory.
+// The session id is DERIVED from the thread root, never stored, so a thread you
+// started last week resumes with full context and no bookkeeping.
+//
+// Inbound  : Teams outgoing webhook (must answer within 5 seconds)
+// Outbound : Power Automate flow (anything after those 5 seconds)
+// See docs/DESIGN.md for why those are two different mechanisms.
+//
+// env:
+//   TEAMS_WEBHOOK_SECRET   inbound HMAC token from the outgoing webhook
+//   TEAMS_FLOW_URL         outbound POST url from the Power Automate flow
+//   REPO_DIR               working directory the agent operates in
+//   TEAMS_ALLOWED_AAD_IDS  comma-separated aadObjectIds allowed to drive it
+
+const http = require("http");
+const fs = require("fs");
+const path = require("path");
+const { CopilotClient, approveAll } = require("@github/copilot-sdk");
+const {
+  isSignatureValid,
+  toPlainText,
+  threadRootOf,
+  sessionIdFor,
+  postToThread,
+} = require("../lib/teams");
+
+const num = (name, dflt) => Number(process.env[name] ?? dflt);
+
+const PORT = num("PORT", 3978);
+const SECRET = process.env.TEAMS_WEBHOOK_SECRET;
+const FLOW_URL = process.env.TEAMS_FLOW_URL;
+const REPO_DIR = process.env.REPO_DIR ?? process.cwd();
+const MODEL = process.env.COPILOT_MODEL;
+const AUDIT_PATH = process.env.AUDIT_LOG ?? path.join(__dirname, "..", "audit.jsonl");
+
+// Who is allowed to drive the agent. HMAC proves a message came from Teams; it
+// says nothing about who typed it. This is the only real access control.
+const ALLOWED = (process.env.TEAMS_ALLOWED_AAD_IDS ?? "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+// Budget for the agent's own work. Time spent waiting for a human to answer a
+// question is credited back, so a slow reply never kills a healthy turn.
+const TURN_TIMEOUT_MS = num("TURN_TIMEOUT_MS", 30 * 60 * 1000);
+// A parked question holds the turn open, and turns are serialized, so an
+// unanswered question would freeze the bridge forever without this.
+const ANSWER_TIMEOUT_MS = num("ANSWER_TIMEOUT_MS", 60 * 60 * 1000);
+// Two minutes of silence looks broken, especially on a phone.
+const MILESTONE_MIN_GAP_MS = num("MILESTONE_MIN_GAP_MS", 15 * 1000);
+// How long the agent may work in silence before we fall back to naming the
+// tool it is running, just to prove it is still alive.
+const HEARTBEAT_MS = num("HEARTBEAT_MS", 45 * 1000);
+// Teams chokes on very long messages, and nobody reads them at a traffic light.
+const MAX_POST_CHARS = num("MAX_POST_CHARS", 3500);
+
+// Tools whose names are noise in a chat thread. ask_user in particular would
+// announce itself right after the question it is asking.
+const QUIET_TOOLS = new Set(["ask_user", "store_memory", "vote_memory", "manage_schedule"]);
+
+const t0 = Date.now();
+const stamp = () => `+${((Date.now() - t0) / 1000).toFixed(1)}s`;
+const log = (...a) => console.log(stamp().padStart(9), ...a);
+
+// threadRoot -> resolver for a question the agent is waiting on.
+// In-memory by design: it belongs to an in-flight turn, which dies on restart
+// anyway. If the bridge restarts mid-question the answer is treated as a new
+// prompt, which is recoverable; a stale resolver on disk would not be.
+const pending = new Map();
+// threadRoot -> milestone poster for the turn currently running.
+const posters = new Map();
+// Turns are serialized: they share one working directory, so two at once would
+// corrupt each other. Holds the threadRoot of the active turn, or null.
+let activeThread = null;
+
+function audit(entry) {
+  const line = JSON.stringify({ at: new Date().toISOString(), ...entry });
+  fs.appendFile(AUDIT_PATH, line + "\n", (err) => {
+    if (err) log("!! audit write failed:", err.message);
+  });
+}
+
+function clip(text) {
+  if (text.length <= MAX_POST_CHARS) return text;
+  return text.slice(0, MAX_POST_CHARS) + "\n\n[...truncated]";
+}
+
+async function post(threadRoot, text) {
+  const r = await postToThread(FLOW_URL, threadRoot, clip(text));
+  if (r.skipped) {
+    log("!! TEAMS_FLOW_URL not set, would have posted:", JSON.stringify(text.slice(0, 120)));
+    return;
+  }
+  log(`flow POST -> ${r.status} in ${r.ms}ms`);
+  if (!r.ok) log("!! flow call failed, this message never reached Teams");
+}
+
+// Progress reporting, two lanes.
+//
+// Content (the agent's own words) is queued and never dropped. Progress
+// (what it is currently doing) is a single slot where the newest wins, because
+// a superseded "reading auth.js" is worth nothing once it has moved on.
+// Both share one rate limit so a phone does not buzz continuously.
+function makeMilestonePoster(threadRoot) {
+  const content = [];
+  const startedAt = Date.now();
+  let progress = null;
+  let timer = null;
+  let lastPostAt = 0;
+  let lastPosted = "";
+  let stopped = false;
+
+  const flush = async () => {
+    timer = null;
+    if (stopped) return;
+    const next = content.length ? content.shift() : progress;
+    if (next === null || next === undefined) return;
+    if (next === progress) progress = null;
+    if (next === lastPosted) return schedule();
+    lastPosted = next;
+    lastPostAt = Date.now();
+    await post(threadRoot, next).catch((e) => log("!! milestone post failed:", e.message));
+    schedule();
+  };
+
+  const schedule = () => {
+    if (stopped || timer) return;
+    if (!content.length && progress === null) return;
+    const wait = Math.max(0, MILESTONE_MIN_GAP_MS - (Date.now() - lastPostAt));
+    timer = setTimeout(flush, wait);
+  };
+
+  return {
+    // The agent said something worth keeping.
+    say(text) {
+      const t = (text ?? "").trim();
+      if (t) content.push(t);
+      schedule();
+    },
+    // The agent is doing something; only the latest matters.
+    doing(text) {
+      const t = (text ?? "").trim();
+      if (t) progress = t;
+      schedule();
+    },
+    // How long since anything actually reached Teams. Used to decide whether
+    // the silence is long enough to justify a low-value heartbeat.
+    quietFor() {
+      return Date.now() - (lastPostAt || startedAt);
+    },
+    wasPosted(text) {
+      return (text ?? "").trim() === lastPosted;
+    },
+    stop() {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    },
+  };
+}
+
+// Ask the user something and park until they reply in the same thread.
+// Returned as a Promise, which is exactly what the SDK's onUserInputRequest
+// accepts - so the agent simply blocks, as it would in a terminal.
+function askQuestion(threadRoot, request) {
+  const lines = [request.question, ""];
+  const choices = request.choices ?? [];
+  choices.forEach((c, i) => lines.push(`${i + 1}. ${c}`));
+  if (choices.length) lines.push("");
+  lines.push("Reply in this thread — and @mention me, or I will not see it.");
+
+  const askedAt = Date.now();
+  const parked = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending.delete(threadRoot);
+      reject(new Error("question timed out"));
+    }, ANSWER_TIMEOUT_MS);
+    pending.set(threadRoot, (answer) => {
+      clearTimeout(timer);
+      pending.delete(threadRoot);
+      const waited = Date.now() - askedAt;
+      log(`ANSWER after ${(waited / 1000).toFixed(1)}s: ${JSON.stringify(answer)}`);
+      resolve({ answer, waited });
+    });
+  });
+
+  log(`ASKING: ${JSON.stringify(request.question)}`);
+  audit({ kind: "question", threadRoot, question: request.question, choices });
+
+  return post(threadRoot, lines.join("\n"))
+    .then(() => parked)
+    .then(({ answer, waited }) => {
+      // The agent should not be penalised for the time a human took to reply.
+      turnGuard?.credit(waited);
+      audit({ kind: "answer", threadRoot, answer, waitedMs: waited });
+      // Map a bare "2" onto the choice it refers to, so the agent gets the
+      // words it offered rather than a digit it has to re-interpret.
+      const asIndex = Number(answer.trim());
+      const picked =
+        Number.isInteger(asIndex) && asIndex >= 1 && asIndex <= choices.length
+          ? choices[asIndex - 1]
+          : answer;
+      return { answer: picked, wasFreeform: picked === answer };
+    });
+}
+
+// A deadline the agent's work must meet, which can be extended when the delay
+// was ours to wait for rather than the agent's fault.
+let turnGuard = null;
+function makeTurnGuard(ms) {
+  let deadline = Date.now() + ms;
+  let done = false;
+  const promise = new Promise((_, reject) => {
+    const tick = () => {
+      if (done) return;
+      if (Date.now() >= deadline) return reject(new Error("turn timed out"));
+      setTimeout(tick, 5000).unref();
+    };
+    setTimeout(tick, 5000).unref();
+  });
+  return {
+    promise,
+    credit: (extra) => {
+      deadline += extra;
+    },
+    release: () => {
+      done = true;
+    },
+  };
+}
+
+// The agent runs with the Teams secrets stripped from its environment. It has
+// a shell, so anything left in process.env is one `env` away from being posted
+// into the channel. Removing them at spawn time is a wall, not a filter.
+const agentEnv = { ...process.env };
+delete agentEnv.TEAMS_WEBHOOK_SECRET;
+delete agentEnv.TEAMS_FLOW_URL;
+
+const client = new CopilotClient({ env: agentEnv, workingDirectory: REPO_DIR });
+
+// Resume the thread's session, or start it if this is the first message.
+// Both paths use the SAME derived id, so an old thread picks up where it left
+// off and a wiped session degrades to a fresh one rather than an error.
+async function openSession(threadRoot) {
+  const id = sessionIdFor(threadRoot);
+  const config = {
+    workingDirectory: REPO_DIR,
+    infiniteSessions: { enabled: true },
+    onPermissionRequest: (...args) => {
+      const req = args[0];
+      audit({ kind: "permission", threadRoot, tool: req?.toolName ?? req?.tool ?? null });
+      return approveAll(...args);
+    },
+    onUserInputRequest: (request) => askQuestion(threadRoot, request),
+  };
+  if (MODEL) config.model = MODEL;
+
+  try {
+    const session = await client.resumeSession(id, config);
+    log(`resumed session ${id}`);
+    return { session, resumed: true };
+  } catch (e) {
+    log(`no session to resume (${e.message}), creating ${id}`);
+    const session = await client.createSession({ ...config, sessionId: id });
+    return { session, resumed: false };
+  }
+}
+
+async function runTurn(threadRoot, prompt) {
+  const poster = makeMilestonePoster(threadRoot);
+  posters.set(threadRoot, poster);
+  turnGuard = makeTurnGuard(TURN_TIMEOUT_MS);
+  const startedAt = Date.now();
+  let unsubscribe = null;
+
+  try {
+    const { session, resumed } = await openSession(threadRoot);
+    log(`turn start (${resumed ? "resumed" : "new"}) prompt=${JSON.stringify(prompt)}`);
+
+    // We wait for session.idle ourselves rather than using sendAndWait, whose
+    // default 60s timeout would abandon any turn where the user takes longer
+    // than a minute to answer a question - which is the normal case here.
+    let lastAssistant = null;
+    let armed = false;
+    let resolveIdle;
+    let rejectTurn;
+    const idle = new Promise((resolve, reject) => {
+      resolveIdle = resolve;
+      rejectTurn = reject;
+    });
+
+    unsubscribe = session.on((event) => {
+      switch (event.type) {
+        case "assistant.intent":
+          poster.doing(event.data.intent);
+          break;
+        case "assistant.message":
+          lastAssistant = event;
+          poster.say(event.data.content);
+          break;
+        case "tool.execution_start":
+          // A raw tool name is the least useful thing we can send, so it is
+          // only worth it to break a long silence. Never while the user is
+          // being asked something - the question is the message.
+          if (
+            !pending.has(threadRoot) &&
+            !QUIET_TOOLS.has(event.data.toolName) &&
+            poster.quietFor() > HEARTBEAT_MS
+          ) {
+            poster.doing(`still working… (${event.data.toolName})`);
+          }
+          break;
+        case "session.compaction_start":
+          log("context compaction started (long thread being summarised)");
+          break;
+        case "session.error":
+          log("!! session.error:", JSON.stringify(event.data).slice(0, 300));
+          rejectTurn(new Error(event.data.message ?? "session error"));
+          break;
+        case "session.idle":
+          if (armed) resolveIdle();
+          break;
+        default:
+          break;
+      }
+    });
+
+    armed = true;
+    await session.send(prompt);
+    await Promise.race([idle, turnGuard.promise]);
+
+    // The final message comes from the event stream, not a return value.
+    // AssistantMessageEvent puts the text at data.content; there is no .text.
+    const finalText = lastAssistant?.data?.content;
+    const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
+    log(`turn complete in ${elapsed}s`);
+
+    if (!finalText) {
+      await post(threadRoot, "That turn finished without a reply. Try asking again.");
+    } else if (!poster.wasPosted(finalText)) {
+      await post(threadRoot, finalText);
+    } else {
+      log("final message already posted as a milestone, not repeating it");
+    }
+    audit({ kind: "turn_complete", threadRoot, elapsedMs: Date.now() - startedAt });
+  } catch (e) {
+    log("turn failed:", e.stack || e.message);
+    audit({ kind: "turn_failed", threadRoot, error: e.message });
+    await post(threadRoot, `That turn failed: ${e.message}`).catch(() => {});
+  } finally {
+    turnGuard?.release();
+    turnGuard = null;
+    if (unsubscribe) unsubscribe();
+    poster.stop();
+    posters.delete(threadRoot);
+    pending.delete(threadRoot);
+    activeThread = null;
+  }
+}
+
+const server = http.createServer((req, res) => {
+  let raw = "";
+  req.on("data", (c) => (raw += c));
+  req.on("end", () => {
+    const signatureOk = isSignatureValid(raw, req.headers.authorization, SECRET);
+
+    let activity;
+    try {
+      activity = JSON.parse(raw);
+    } catch {
+      res.writeHead(400).end();
+      return;
+    }
+
+    const text = toPlainText(activity.text);
+    const threadRoot = threadRootOf(activity);
+    const who = activity?.from?.name ?? "?";
+    const aadId = activity?.from?.aadObjectId ?? null;
+
+    console.log("─".repeat(70));
+    log(`from       : ${who} (${aadId ?? "no aad id"})`);
+    log(`text       : ${JSON.stringify(text)}`);
+    log(`threadRoot : ${threadRoot}`);
+
+    const reply = (t) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ type: "message", text: t }));
+    };
+
+    // Every inbound message is recorded, accepted or not.
+    audit({ kind: "inbound", threadRoot, who, aadId, signatureOk, text });
+
+    if (!signatureOk) {
+      log("REJECTED: bad signature");
+      reply("Rejected: signature check failed.");
+      return;
+    }
+    if (!threadRoot) {
+      log("REJECTED: no thread root");
+      reply("Could not work out which thread this is.");
+      return;
+    }
+    if (ALLOWED.length && !ALLOWED.includes(aadId)) {
+      log(`REJECTED: ${who} is not on the allowlist`);
+      reply("You are not on the allowlist for this bridge.");
+      return;
+    }
+
+    // Is this the answer to a question the agent is waiting on?
+    const resolver = pending.get(threadRoot);
+    if (resolver) {
+      log("ROUTED AS ANSWER");
+      resolver(text);
+      reply("Got it, carrying on.");
+      return;
+    }
+
+    if (activeThread === threadRoot) {
+      log("turn already running for this thread");
+      reply("Still working on the last one — I'll report back here.");
+      return;
+    }
+    if (activeThread) {
+      log(`busy with thread ${activeThread}`);
+      reply("I'm busy with another thread right now. Try again once it finishes.");
+      return;
+    }
+    if (!text) {
+      reply("That came through empty — did you only send the @mention?");
+      return;
+    }
+
+    log("ROUTED AS NEW PROMPT");
+    activeThread = threadRoot;
+    runTurn(threadRoot, text); // deliberately not awaited: the 5s window is ticking
+    reply("On it 👍 I'll report back in this thread.");
+  });
+});
+
+async function main() {
+  await client.start();
+  server.listen(PORT, () => {
+    console.log(`bridge listening on http://localhost:${PORT}/api/messages`);
+    console.log(`repo dir         ${REPO_DIR}`);
+    console.log(`model            ${MODEL ?? "(runtime default)"}`);
+    console.log(`HMAC             ${SECRET ? "ON" : "OFF (no TEAMS_WEBHOOK_SECRET)"}`);
+    console.log(`outbound flow    ${FLOW_URL ? "SET" : "NOT SET (replies will no-op)"}`);
+    console.log(`allowlist        ${ALLOWED.length ? ALLOWED.join(", ") : "OFF (anyone in the channel)"}`);
+    console.log(`audit log        ${AUDIT_PATH}`);
+  });
+}
+
+main().catch((e) => {
+  console.error("failed to start:", e);
+  process.exit(1);
+});
