@@ -94,10 +94,52 @@ a looser policy — DLP is evaluated **per environment**.
 
 ## Scripts
 
+Copy `.env.example` to `.env` and fill in both secrets, then every script picks them
+up automatically:
+
+```sh
+cp .env.example .env
+$EDITOR .env
+npm run bridge
+```
+
+`.env` is gitignored. Both values are bearer secrets — the flow URL's `sig=` parameter
+*is* its auth.
+
+Prefer not to keep them on disk? Export them per shell instead:
+
 ```sh
 read -rs TEAMS_WEBHOOK_SECRET && export TEAMS_WEBHOOK_SECRET
 read -rs TEAMS_FLOW_URL       && export TEAMS_FLOW_URL
 ```
+
+## Keeping it running
+
+Both the bridge **and** the tunnel must stay up. A stopped tunnel does not fail fast —
+the public URL still resolves, hangs ~15s and returns an empty 200, so Teams times out
+at 5s and blames the webhook while the bridge logs nothing.
+
+```sh
+tmux new -d -s tunnel '~/bin/devtunnel host teams-bridge'
+tmux new -d -s bridge 'cd ~/workspace/code-from-teams && npm run bridge'
+
+tmux ls                     # what's running
+tmux attach -t bridge       # watch logs; Ctrl+B release, then D to detach
+```
+
+WSL can shut down when the last terminal closes, killing tmux with it. Keep one
+terminal open on WSL, or `sudo loginctl enable-linger $USER`.
+
+Health check:
+
+```sh
+curl -s -m 15 -o /dev/null -w '%{http_code} in %{time_total}s\n' \
+  -X POST https://<your-tunnel>/api/messages \
+  -H 'Content-Type: application/json' -d '{"type":"message","text":"probe"}'
+```
+
+Fast response + `signature check failed` means everything is healthy (the probe is
+unsigned, so rejecting it is correct). ~15s and an empty body means the tunnel is down.
 
 | Script | Purpose |
 |---|---|

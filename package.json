@@ -4,8 +4,8 @@
   "private": true,
   "description": "Drive GitHub Copilot from a Microsoft Teams thread",
   "scripts": {
-    "bridge": "node scripts/teams-roundtrip-test.js",
-    "post": "node scripts/postflow.js",
-    "soak": "node scripts/soakflow.js"
+    "bridge": "node --env-file-if-exists=.env scripts/teams-roundtrip-test.js",
+    "post": "node --env-file-if-exists=.env scripts/postflow.js",
+    "soak": "node --env-file-if-exists=.env scripts/soakflow.js"
   }
 }
