@@ -118,30 +118,6 @@ Then, **once per account — not once per machine**:
 > new tunnel will be created". So `devtunnel host -p 3978` starts fine, prints a
 > healthy public URL, and that URL is not the one your Teams webhook points at.
 > Messages then simply never arrive, with nothing anywhere reporting a problem.
->
-> **Ctrl+C on `devtunnel host teams-bridge` is safe** and is the normal way to stop it.
-> It ends the hosting process only — the tunnel, its URL and its port survive, because
-> they belong to your account. The public URL just has no host until you start one
-> again (which looks like the ~15s hang and empty 200 above). Run it under tmux so it
-> also survives closing the terminal.
-
-> **Don't reach for `-d` (device code) when the browser hangs.** It is the obvious next
-> move and it fails differently: sign-in succeeds, then Conditional Access rejects it
-> with *"your sign-in was successful but does not meet the criteria to access this
-> resource"*. In a managed tenant the device-code flow is commonly blocked outright.
-> Browser auth with the shim is the path that works — fix the browser, don't route
-> around it.
->
-> **Worse, starting a device-code login logs you out of the one you already had**, even
-> if you abort it — the stored credential is cleared up front, not on success. A
-> running `devtunnel host` keeps serving because its relay connection is already
-> established, so nothing appears wrong until the next restart fails to authenticate.
-
-> **Call it by full path.** Ubuntu's `~/.profile` only adds `~/bin` to `PATH` if that
-> directory **already existed when you logged in** — and the installer creates it
-> mid-session, so a bare `devtunnel` gives `command not found` until you log out and
-> back in. Full paths sidestep it entirely, which is why every command here uses one.
-> To get the short name now: `export PATH="$HOME/bin:$PATH"`.
 
 The name makes the URL stable, so the webhook callback is set once. The tunnel belongs
 to your **account, not your machine** — see [Another machine](#another-machine).
