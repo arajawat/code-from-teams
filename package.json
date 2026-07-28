@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Drive GitHub Copilot from a Microsoft Teams thread",
+  "license": "MIT",
   "scripts": {
     "bridge": "node --env-file-if-exists=.env scripts/bridge.js",
     "harness": "node --env-file-if-exists=.env scripts/teams-roundtrip-test.js",

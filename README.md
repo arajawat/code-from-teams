@@ -560,3 +560,13 @@ credentials, driven by a chat channel.
 agent, not what it *reads*. A hostile string in a repo file, issue or fetched page can
 steer it using your credentials — and yolo mode removes the prompt that would have
 caught it.
+
+---
+
+## License
+
+[MIT](LICENSE).
+
+Worth reading the security section above before running this rather than after. It
+stands up an auto-approving agent, holding real credentials, behind a public anonymous
+tunnel — the licence's "as is, no warranty" is not boilerplate here.
