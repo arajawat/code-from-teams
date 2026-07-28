@@ -1,7 +1,26 @@
+<div align="center">
+
 # Code from Teams
 
-Drive GitHub Copilot from a Microsoft Teams thread — so you can direct real coding work
-while driving, making coffee, or otherwise away from a keyboard.
+**Drive GitHub Copilot from a Microsoft Teams thread** — so you can direct real coding
+work while driving, making coffee, or otherwise away from a keyboard.
+
+<img src="assets/demo-thread.svg" width="470"
+     alt="A Teams thread: the user asks Copilot to add input validation to util.js and to ask first how strict to be. Copilot acks, then asks a question with three numbered options and a recommendation. The thread pauses for 48.5 seconds while the user is away. The user replies 'lets do #1'. Copilot reports that add, sub and mul now reject non-numeric input and the suite passes 9 of 9, in 91.7 seconds with 7 tools auto-approved and nothing stored.">
+
+<!-- Static badges only. Anything that queries the repo (build status, stars) 404s
+     on a private repo and renders as a broken image - a silent failure, which is
+     the exact pattern docs/FINDINGS.md exists to warn about.
+     Kept on ONE line on purpose: a line break between them becomes a <br> and
+     stacks them vertically. -->
+
+![status](https://img.shields.io/badge/status-working%20end%20to%20end-3fb950?style=flat-square) ![node](https://img.shields.io/badge/node-%E2%89%A5%2022.12-5FA04E?style=flat-square&logo=node.js&logoColor=white) ![sdk](https://img.shields.io/badge/Copilot%20SDK-1.0.8-8957e5?style=flat-square) ![database](https://img.shields.io/badge/database-none-58a6ff?style=flat-square) ![license](https://img.shields.io/badge/license-MIT-6e7681?style=flat-square)
+
+**`1 Teams thread  =  1 Copilot session`**
+
+</div>
+
+> A real turn, replayed. The pause is real too — the person had put their phone down.
 
 The goal is conversational fidelity, not task submission:
 
@@ -9,17 +28,64 @@ The goal is conversational fidelity, not task submission:
 > from Teams."
 
 The agent can ask you a question mid-task and wait for your answer, exactly as it does
-in a terminal.
+in a terminal. Reply to that thread days later and it still knows what you decided.
 
-**Core abstraction:** `1 Teams thread = 1 Copilot session`
+## The receipts
 
-**Status:** working end to end against real Teams. One live run: acked inside the
-5-second window, auto-approved 7 tools, asked a question with options, **parked 48
-seconds** while the user was away, took `"lets do #1"` as the answer rather than a new
-prompt, and finished in 91 seconds. Reply to that thread days later and it still knows
-what you decided. Replies are shaped for a phone, not a terminal — it writes code into
-the repo and tells you what changed, rather than pasting a diff at you.
-See [docs/FINDINGS.md](docs/FINDINGS.md).
+Every number here comes from a run that is logged in
+[docs/FINDINGS.md](docs/FINDINGS.md) — none of it is a projection.
+
+| | |
+|---:|---|
+| **91.7s** | one full turn against real Teams: ask → clarify → wait → work → report |
+| **48.5s** | the agent parked mid-turn while the user was away, holding the turn open — no polling, no keepalive |
+| **7** | tools auto-approved in that turn, nothing blocked |
+| **`"lets do #1"`** | routed as an *answer* to the parked question, not as a new prompt |
+| **5s** | the inbound webhook window, which is hard, and which we always answer inside |
+| **0** | databases, mapping tables, or state files. The session id is derived from the thread |
+| **6 weeks** | age of the oldest session on disk that still resumes with full context |
+| **15/15** | outbound posts in the soak test, zero failures |
+| **1460 → 694** | characters in the same answer, before and after the voice prompt — and the long one pasted a diff at someone who was driving |
+
+**Status:** working end to end against real Teams. Replies are shaped for a phone, not a
+terminal — it writes code into the repo and tells you what changed, rather than pasting
+a diff at you.
+
+---
+
+## One turn, end to end
+
+<!-- Rendered by GitHub natively. The two arrows back into Teams are deliberately
+     different: that asymmetry is the whole architecture. -->
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor P as You, on a phone
+    participant T as Teams thread
+    participant B as Bridge :3978
+    participant C as Copilot session
+    participant F as Power Automate
+
+    P->>T: @copilot add validation to util.js
+    T->>B: outgoing webhook, HMAC signed
+    Note over B: must answer within 5 seconds
+    B-->>T: "On it" — in-thread, free
+    B->>C: resume teams-1785136979855
+    C-->>B: needs a decision
+    B->>F: POST threadRoot + text
+    F->>T: reply inside the same thread
+    Note over P,T: parked 48.5s — the turn is held open
+    P->>T: @copilot lets do #1
+    T->>B: same webhook, routed as ANSWER
+    B->>C: resolves the parked promise
+    C-->>B: done, 9 of 9 tests pass
+    B->>F: final result
+    F->>T: same thread, 91.7s after the first message
+```
+
+Inbound and outbound are **different mechanisms**, and that asymmetry is the single most
+important thing to understand here — the next section is why.
 
 ---
 
@@ -534,6 +600,7 @@ conversations along; skip it and threads degrade gracefully to fresh ones.
 | `npm run harness` | The original scripted round-trip: ack → question → answer → delayed post. |
 | `npm run post -- <threadRoot> "hi"` | Post one message into a thread via the flow. |
 | `npm run soak -- <threadRoot> 60 15` | Post on an interval to catch a silently suspended flow. |
+| `npm run demo` | Regenerate the README's animated SVG in `assets/`. `-- --all` also builds the split and log-only cuts, for slides. |
 
 `msg` + `mockflow` together exercise the full path with zero Teams messages.
 `scripts/teams-webhook-test.js` is a bare inbound receiver, useful when you only want

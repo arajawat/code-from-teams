@@ -6,6 +6,7 @@
   "license": "MIT",
   "scripts": {
     "bridge": "node --env-file-if-exists=.env scripts/bridge.js",
+    "demo": "node scripts/make-demo.js",
     "harness": "node --env-file-if-exists=.env scripts/teams-roundtrip-test.js",
     "mockflow": "node scripts/mockflow.js",
     "msg": "node --env-file-if-exists=.env scripts/fakemsg.js",
