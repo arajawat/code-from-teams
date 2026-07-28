@@ -989,15 +989,34 @@ used to authenticate as anyone, but two things still deserved redacting:
 | what | why it mattered |
 |---|---|
 | the live tunnel URL | not a secret, but a working address pointing at a yolo agent — an invitation to probe |
-| a real `aadObjectId` hardcoded in `fakemsg.js` | a colleague's directory identifier, published without asking them |
+| a real `aadObjectId` hardcoded in `fakemsg.js` | a colleague's directory identifier, which would have been published without asking them |
 
 Both were replaced with placeholders. Neither would have failed a secret scanner.
 
-**What is still true:** the pre-redaction commits remain in the history, so both values
-are recoverable by anyone who can read the repo. That is an accepted risk *because the
-repo is private*. Making it public would need a history rewrite first — and that is
-exactly the decision that is easy to forget six months later, which is why it is written
-down here rather than left as a good intention.
+**Re-audited 2026-07-28 — the history is clean.** This section used to say the
+pre-redaction commits still held both values, so a history rewrite was required before the
+repo could go public. That was wrong, and the correction matters more than the original
+claim, so it is recorded rather than quietly deleted.
+
+Neither value is recoverable, because neither was ever committed. Reading all 94 file blobs
+in the object store — every historical version of every file across the 39 commits, not the
+diffs — turns up placeholders and nothing else. `fakemsg.js` carried `00000000-0000-0000-0000-000000000000` in the very
+first commit that introduced it (`1b36448`), and that all-zero placeholder is the only GUID
+anywhere in the history. The tunnel host was `a1b2c3d4-3978.euw.devtunnels.ms` from its
+first appearance (`73cfae6`), which is the same placeholder convention these docs use
+elsewhere. So whatever prompted the redaction was cleaned out of the working tree before it
+was ever staged: the commit that claims to redact is placeholder-to-placeholder tidying,
+plus a genuinely useful fail-closed default for `FAKE_AAD_ID`.
+
+No rewrite is hiding this. There is no `refs/original` and no `.git/filter-repo`, every
+commit has identical author and committer dates, and `git fsck` reports no unreachable or
+dangling objects. GitHub holds a single ref identical to the local `main`, so that scan is a
+complete account of what anyone who can read the repo could recover.
+
+The lesson survives the correction, only sharpened: audit the history rather than trusting
+either the working tree *or* a commit message about the history. The redaction commit
+asserted it was removing a real directory id. The object store says otherwise, and the
+object store is the only thing a reader actually gets.
 
 ## 20. One tunnel, one host — measured
 
