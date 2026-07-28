@@ -30,62 +30,13 @@ The goal is conversational fidelity, not task submission:
 The agent can ask you a question mid-task and wait for your answer, exactly as it does
 in a terminal. Reply to that thread days later and it still knows what you decided.
 
-## The receipts
+**Status:** working end to end against real Teams — **91.7s** for a full turn, **48.5s**
+of that parked waiting on the user's answer, **0** databases or state files. Replies are
+shaped for a phone, not a terminal: it writes code into the repo and tells you what
+changed, rather than pasting a diff at you.
 
-Every number here comes from a run that is logged in
-[docs/FINDINGS.md](docs/FINDINGS.md) — none of it is a projection.
-
-| | |
-|---:|---|
-| **91.7s** | one full turn against real Teams: ask → clarify → wait → work → report |
-| **48.5s** | the agent parked mid-turn while the user was away, holding the turn open — no polling, no keepalive |
-| **7** | tools auto-approved in that turn, nothing blocked |
-| **`"lets do #1"`** | routed as an *answer* to the parked question, not as a new prompt |
-| **5s** | the inbound webhook window, which is hard, and which we always answer inside |
-| **0** | databases, mapping tables, or state files. The session id is derived from the thread |
-| **6 weeks** | age of the oldest session on disk that still resumes with full context |
-| **15/15** | outbound posts in the soak test, zero failures |
-| **1460 → 694** | characters in the same answer, before and after the voice prompt — and the long one pasted a diff at someone who was driving |
-
-**Status:** working end to end against real Teams. Replies are shaped for a phone, not a
-terminal — it writes code into the repo and tells you what changed, rather than pasting
-a diff at you.
-
----
-
-## One turn, end to end
-
-<!-- Rendered by GitHub natively. The two arrows back into Teams are deliberately
-     different: that asymmetry is the whole architecture. -->
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor P as You, on a phone
-    participant T as Teams thread
-    participant B as Bridge :3978
-    participant C as Copilot session
-    participant F as Power Automate
-
-    P->>T: @copilot add validation to util.js
-    T->>B: outgoing webhook, HMAC signed
-    Note over B: must answer within 5 seconds
-    B-->>T: "On it" — in-thread, free
-    B->>C: resume teams-1785136979855
-    C-->>B: needs a decision
-    B->>F: POST threadRoot + text
-    F->>T: reply inside the same thread
-    Note over P,T: parked 48.5s — the turn is held open
-    P->>T: @copilot lets do #1
-    T->>B: same webhook, routed as ANSWER
-    B->>C: resolves the parked promise
-    C-->>B: done, 9 of 9 tests pass
-    B->>F: final result
-    F->>T: same thread, 91.7s after the first message
-```
-
-Inbound and outbound are **different mechanisms**, and that asymmetry is the single most
-important thing to understand here — the next section is why.
+Every number is from a logged run, not a projection — see
+**[the receipts, and one turn end to end](docs/RECEIPTS.md)**.
 
 ---
 
@@ -125,6 +76,8 @@ That is the whole persistence design: no database, no mapping table, nothing to 
 - **[docs/FINDINGS.md](docs/FINDINGS.md)** — what worked, what failed, and what we
   deliberately didn't try because a better option existed. Read this first.
 - **[docs/DESIGN.md](docs/DESIGN.md)** — the running design log with full rationale.
+- **[docs/RECEIPTS.md](docs/RECEIPTS.md)** — the measured numbers, and a diagram of one
+  turn from message to result.
 
 ---
 
