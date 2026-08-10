@@ -1,3 +1,5 @@
+
+
 <div align="center">
 
 # Code from Teams
@@ -427,7 +429,7 @@ inline; the short version:
 |---|---|---|
 | `repoDir` | the bridge's own directory | the repo the agent works in — point it at a scratch clone. `~` expands. Checked at startup for existence, being a git repo, and a **git identity**, because a missing identity otherwise fails a commit minutes into a turn |
 | `model` | runtime default | pinned, because the runtime default drifts as new models ship |
-| `effort` | runtime default | `low` \| `medium` \| `high` \| `xhigh`. Also pinned — the default resolved to `medium`, so the agent was quietly thinking less hard than it could |
+| `effort` | `xhigh` | `low` \| `medium` \| `high` \| `xhigh`. Also pinned — the default resolved to `medium`, so the agent was quietly thinking less hard than it could |
 | `yolo` | `true` | auto-approve every tool call. `false` does **not** prompt you — there is no approval path over Teams — it denies tools outright |
 | `voiceFile` | `prompts/teams-voice.md` | appended to the system prompt so replies suit a phone. Missing file = loud banner warning, not a silent revert |
 | `allowedAadIds` | `[]` — **anyone in the channel** | the only real authorisation control |
