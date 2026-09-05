@@ -398,6 +398,30 @@ fast `200` means you are done.
 To avoid the manual step entirely, `sudo loginctl enable-linger $USER` keeps tmux alive
 across WSL shutdowns.
 
+### After weeks away
+
+A long gap is a different problem from a restart, because the things that break are not
+on your machine. Measured on a revival after about four weeks, with a **clean checkout
+and no code changes at all**:
+
+| what decayed | symptom | repair |
+|---|---|---|
+| Power Automate flow **disabled** | you get the `On it 👍` ack, then silence forever | re-enable it in **My flows** |
+| trigger URL **retired** by Microsoft | `!! flow call failed` in the bridge log | re-copy the **HTTP POST URL** from the trigger card — the legacy `logic.azure.com` form is dead, the new one is `*.api.powerplatform.com` |
+| dev tunnel near expiry | still worked, **4.6 days** left of the 30-day window | `devtunnel host teams-bridge` resets it |
+| `.env`, `bridge.config.json`, `node_modules/` | gitignored, so simply absent | recreate them; the banner names what is missing |
+
+Re-enabling the flow and re-copying its URL are **two separate repairs** — doing only
+the first leaves you equally broken with one fewer suspect. Isolate the outbound leg on
+its own before blaming anything else:
+
+```sh
+npm run post -- <threadRoot> "outbound probe"      # HTTP 202 = flow leg is alive
+```
+
+Full detail, and the order that isolates each fault, in
+[FINDINGS §23](docs/FINDINGS.md).
+
 ---
 
 ## Configuration

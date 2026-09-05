@@ -1230,3 +1230,113 @@ All three are the same shape as landmines 18-21: **a setup step that works on th
 machine that wrote it is not a verified step.** The environment differences between two
 boxes are invisible until a second box runs the instructions, and every one of these
 surfaced as silence rather than an error.
+
+---
+
+## 23. What decays while you are not looking
+
+The bridge was left alone for roughly four weeks and stopped working. **Nothing in the
+repository had changed** — `git status` was clean and the last commit was untouched.
+Every failure was on the cloud side, or was local state that git is told to ignore.
+
+This section exists because "it worked when I left it" is the least useful bug report
+there is, and because two of the three decays give you no error at all.
+
+### Decay 1: the Power Automate flow turns itself off
+
+The flow was **disabled**. Power Automate switches off flows that have not run for an
+extended period, and DLP evaluation can do the same independently.
+
+A disabled flow is not a broken flow. It is worse: the inbound leg still works, so the
+bridge accepts the message, acks `On it 👍` inside the 5-second window, and runs the
+whole turn. Only the reply goes nowhere. From Teams the signature is distinctive:
+
+> you get the ack, and then silence forever
+
+Check `make.powerautomate.com` → **My flows** before touching anything else. This costs
+ten seconds and explains the entire symptom.
+
+### Decay 2: the trigger URL was retired underneath us
+
+This one is not inactivity — Microsoft **migrated HTTP and Teams-webhook trigger URLs
+off `logic.azure.com`** and retired the legacy form. The URL now looks like:
+
+```
+https://<id>.<n>.environment.api.powerplatform.com:443/powerautomate/automations/
+  direct/cu/<n>/workflows/<workflow-id>/triggers/manual/paths/invoke?...&sig=<redacted>
+```
+
+So a `TEAMS_FLOW_URL` copied months ago is dead **even after you re-enable the flow**.
+Re-enabling and re-copying are two separate repairs, and doing only the first leaves you
+exactly as broken with one fewer suspect.
+
+The URL is also only visible in the **designer**, on the trigger card, not on the flow's
+details page — which is why it reads as missing. If the field is empty, save the flow
+once and reopen it.
+
+Unlike decay 1, this one does reach the log:
+
+```
+!! flow call failed, this message never reached Teams
+```
+
+That line is the whole diagnosis, and it is worth grepping for before anything else.
+
+### Decay 3: the tunnel expires on a sliding window
+
+```
+$ devtunnel show teams-bridge
+Ports            : 1
+  3978  auto  https://<host>-3978.<region>.devtunnels.ms/
+Tunnel Expiration : 4.6 days
+```
+
+Dev tunnels are deleted after **30 days of inactivity**, so four weeks dormant had spent
+25 of them. The tunnel survived, but only just — and losing it means a new URL and
+re-pointing the Teams outgoing webhook by hand.
+
+**Hosting it resets the window.** Simply running `devtunnel host teams-bridge` was the
+entire repair, and it is why leaving the tunnel hosted (§18) is the advice.
+
+### Decay 4: everything gitignored is, by definition, absent
+
+`.env`, `bridge.config.json` and `node_modules/` are all in `.gitignore`. On a revival
+from a clean checkout — or a machine that has been rebuilt — none of them exist. That is
+correct behaviour, not a bug, but it means a revival is closer to a first install than
+it looks, and the banner is what tells you which pieces are missing.
+
+### The webhook token cannot be regenerated
+
+Worth knowing before you go looking for the button: Teams shows an outgoing webhook's
+security token **once, at creation**, and offers no way to view or reset it afterwards.
+If it is lost, deleting and recreating the webhook is the only path to a new one. The
+callback URL is stable, so recreating costs one paste — but the mention must be picked
+from the autocomplete dropdown again.
+
+Running without the token is survivable but not free: the bridge starts with `HMAC OFF`
+and accepts unauthenticated requests, which on a public anonymous tunnel with yolo on
+means the allowlist is doing all of the work — and with HMAC off, `aadObjectId` is
+trivially forgeable, so it is doing that work badly.
+
+### The order that actually isolates the fault
+
+Each step tells you something the previous one could not:
+
+```sh
+curl -s -m 20 -o /dev/null -w '%{http_code} in %{time_total}s\n' \
+  -X POST https://<tunnel>/api/messages -d '{}'   # fast 200 = tunnel + bridge alive
+npm run post -- <threadRoot> "outbound probe"     # HTTP 202 = flow leg alive
+```
+
+The probe is unsigned, so a fast `200` rejecting it is the healthy answer (§20 has the
+full response table). `npm run post` is the useful one during a revival: it exercises
+the outbound leg **on its own**, with no Teams message and no Copilot turn involved, so
+a `202` proves the flow and its URL in isolation.
+
+### The general lesson
+
+The code was never the problem, and neither was the machine. **Everything that broke was
+a cloud object with its own lifecycle** — a flow that deactivates, a URL the vendor
+retires, a tunnel on an inactivity timer — and none of those changes show up in a diff.
+A project that depends on managed services is not finished when it works; it is finished
+when you know which of its dependencies expire, and how to tell which one did.
