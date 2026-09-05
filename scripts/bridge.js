@@ -138,13 +138,22 @@ function makeMilestonePoster(threadRoot) {
   const flush = async () => {
     timer = null;
     if (stopped) return;
-    const next = content.length ? content.shift() : progress;
-    if (next === null || next === undefined) return;
-    if (next === progress) progress = null;
-    if (next === lastPosted) return schedule();
-    lastPosted = next;
+    let item = null;
+    if (content.length) {
+      item = content.shift();
+    } else if (progress !== null) {
+      item = { text: progress };
+      progress = null;
+    }
+    if (item === null) return;
+    if (item.text === lastPosted) {
+      item.done?.();
+      return schedule();
+    }
+    lastPosted = item.text;
     lastPostAt = Date.now();
-    await post(threadRoot, next).catch((e) => log("!! milestone post failed:", e.message));
+    await post(threadRoot, item.text).catch((e) => log("!! milestone post failed:", e.message));
+    item.done?.();
     schedule();
   };
 
@@ -159,8 +168,20 @@ function makeMilestonePoster(threadRoot) {
     // The agent said something worth keeping.
     say(text) {
       const t = (text ?? "").trim();
-      if (t) content.push(t);
+      if (t) content.push({ text: t });
       schedule();
+    },
+    // Queue a message and resolve once it has actually reached Teams.
+    // Questions go through here rather than posting directly: a direct post
+    // jumps ahead of the explanation already queued behind the rate limit, so
+    // the question arrived BEFORE the text that set it up.
+    sayAndWait(text) {
+      const t = (text ?? "").trim();
+      if (!t) return Promise.resolve();
+      return new Promise((resolve) => {
+        content.push({ text: t, done: resolve });
+        schedule();
+      });
     },
     // The agent is doing something; only the latest matters.
     doing(text) {
@@ -179,6 +200,9 @@ function makeMilestonePoster(threadRoot) {
     stop() {
       stopped = true;
       if (timer) clearTimeout(timer);
+      // Never leave a sayAndWait caller parked on a queue that will not drain.
+      for (const item of content) item.done?.();
+      content.length = 0;
     },
   };
 }
@@ -211,7 +235,12 @@ function askQuestion(threadRoot, request) {
   log(`ASKING: ${JSON.stringify(request.question)}`);
   audit({ kind: "question", threadRoot, question: request.question, choices });
 
-  return post(threadRoot, lines.join("\n"))
+  // Routed through the milestone queue, not posted directly, so it lands AFTER
+  // whatever the agent already said to set the question up. Posting straight to
+  // Teams here would overtake that queued text and arrive out of order.
+  const poster = posters.get(threadRoot);
+  const question = lines.join("\n");
+  return (poster ? poster.sayAndWait(question) : post(threadRoot, question))
     .then(() => parked)
     .then(({ answer, waited }) => {
       // The agent should not be penalised for the time a human took to reply.
